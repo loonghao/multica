@@ -228,6 +228,18 @@ const MODEL_PRICING: Record<
   "glm-4.5-air":        { input: 0.2,  output: 1.1,  cacheRead: 0.03,   cacheWrite: 0.2 },
   "glm-4.5-airx":       { input: 1.1,  output: 4.5,  cacheRead: 0.22,   cacheWrite: 1.1 },
   "glm-4.5-flash":      { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
+
+  // -- Tencent Hunyuan (CodeBuddy domestic models).
+  //    https://cloud.tencent.com/document/product/1729/97731
+  "hunyuan":            { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
+  "hunyuan-turbos":     { input: 0,    output: 0,    cacheRead: 0,      cacheWrite: 0 },
+
+  // -- DeepSeek (priced per api-docs.deepseek.com/quick_start/pricing).
+  //    `deepseek-v3.1` and `deepseek-v3` are CodeBuddy's model IDs that
+  //    map to the same SKU; canonicalCandidates will strip the `.1` suffix.
+  "deepseek-v3.1":      { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
+  "deepseek-v3":        { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0.14 },
+  "deepseek-r1":        { input: 0.55, output: 2.19, cacheRead: 0.14,   cacheWrite: 0.55 },
 };
 
 // Resolve a model string to its pricing tier. Exact match, with four
