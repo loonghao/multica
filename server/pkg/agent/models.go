@@ -100,6 +100,8 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 		models := codexStaticModels()
 		annotateCodexThinking(ctx, models, executablePath)
 		return models, nil
+	case "codebuddy":
+		return codebuddyStaticModels(), nil
 	case "gemini":
 		return geminiStaticModels(), nil
 	case "antigravity":
@@ -1305,4 +1307,41 @@ func isOpenclawIdentifier(s string) bool {
 		}
 	}
 	return true
+}
+
+// ── CodeBuddy static catalog ──
+
+// codebuddyStaticModels lists the models supported by the CodeBuddy Code CLI.
+// CodeBuddy Code supports both domestic (China) and international models.
+// The model IDs are the values accepted by `codebuddy --model <id>`.
+//
+// Sources:
+//   - https://www.codebuddy.ai/docs/zh/cli/http-api
+//   - https://www.codebuddy.cn/apiDocs/open-platform.html
+func codebuddyStaticModels() []Model {
+	return []Model{
+		// -- International models --
+		{ID: "gpt-5.2", Label: "GPT-5.2", Provider: "openai", Default: true},
+		{ID: "gpt-5.2-codex", Label: "GPT-5.2 Codex", Provider: "openai"},
+		{ID: "gpt-5.1", Label: "GPT-5.1", Provider: "openai"},
+		{ID: "gpt-5.1-codex", Label: "GPT-5.1 Codex", Provider: "openai"},
+		{ID: "gpt-5.1-codex-max", Label: "GPT-5.1 Codex Max", Provider: "openai"},
+		{ID: "gpt-5.1-codex-mini", Label: "GPT-5.1 Codex Mini", Provider: "openai"},
+		{ID: "gpt-4o", Label: "GPT-4o", Provider: "openai"},
+		{ID: "gemini-3.0-pro", Label: "Gemini 3.0 Pro", Provider: "google"},
+		{ID: "gemini-3.0-flash", Label: "Gemini 3.0 Flash", Provider: "google"},
+		{ID: "gemini-2.5-pro", Label: "Gemini 2.5 Pro", Provider: "google"},
+		{ID: "gemini-2.5-flash", Label: "Gemini 2.5 Flash", Provider: "google"},
+		{ID: "claude-4.0-sonnet", Label: "Claude 4.0 Sonnet", Provider: "anthropic"},
+
+		// -- Domestic (China) models --
+		{ID: "hunyuan", Label: "Hunyuan (Default)", Provider: "tencent"},
+		{ID: "hunyuan-turbos", Label: "Hunyuan Turbo S", Provider: "tencent"},
+		{ID: "deepseek-v3.1", Label: "DeepSeek V3.1 Think", Provider: "deepseek"},
+		{ID: "deepseek-v3", Label: "DeepSeek V3", Provider: "deepseek"},
+		{ID: "deepseek-r1", Label: "DeepSeek R1", Provider: "deepseek"},
+		{ID: "glm-5.1", Label: "GLM 5.1", Provider: "zhipu"},
+		{ID: "glm-5.0", Label: "GLM 5.0", Provider: "zhipu"},
+		{ID: "glm-4.7", Label: "GLM 4.7", Provider: "zhipu"},
+	}
 }
