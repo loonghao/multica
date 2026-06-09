@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,9 +47,21 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 		cancel()
 		return nil, fmt.Errorf("codebuddy stdout pipe: %w", err)
 	}
-	cmd.Stderr = newLogWriter(b.cfg.Logger, "[codebuddy:stderr] ")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("codebuddy stdin pipe: %w", err)
+	}
+	var closeStdinOnce sync.Once
+	closeStdin := func() { closeStdinOnce.Do(func() { _ = stdin.Close() }) }
+	// Capture stderr into both the daemon log and a bounded tail buffer so
+	// we can include the last few KB in Result.Error when codebuddy exits
+	// unexpectedly.
+	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[codebuddy:stderr] "), agentStderrTailBytes)
+	cmd.Stderr = stderrBuf
 
 	if err := cmd.Start(); err != nil {
+		closeStdin()
 		cancel()
 		return nil, fmt.Errorf("start codebuddy: %w", err)
 	}
@@ -57,6 +71,21 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
 
+	// Write the user prompt via stdin in a separate goroutine so it cannot
+	// deadlock against the stdout reader. With --verbose --output-format
+	// stream-json the CLI emits a startup banner before reading its first
+	// stdin frame; if nothing is draining stdout while we write the prompt,
+	// the child blocks writing stdout, never reads stdin, and our Write
+	// blocks until runCtx fires.
+	writeDone := make(chan error, 1)
+	go func() {
+		err := writeCodeBuddyInput(stdin, prompt)
+		if err != nil {
+			closeStdin()
+		}
+		writeDone <- err
+	}()
+
 	// Close stdout when the context is cancelled so scanner.Scan() unblocks.
 	go func() {
 		<-runCtx.Done()
@@ -65,6 +94,7 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 
 	go func() {
 		defer cancel()
+		defer closeStdin()
 		defer close(msgCh)
 		defer close(resCh)
 
@@ -111,6 +141,13 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 			}
 		}
 
+		// If stdin write failed, surface it so we don't silently hide a
+		// deadlock that consumed the full timeout.
+		if writeErr := <-writeDone; writeErr != nil && finalStatus == "completed" && finalError == "" {
+			finalError = fmt.Sprintf("codebuddy stdin write failed: %v", writeErr)
+			finalStatus = "failed"
+		}
+
 		waitErr := cmd.Wait()
 		duration := time.Since(startTime)
 
@@ -124,6 +161,14 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 		case waitErr != nil && finalStatus == "completed":
 			finalStatus = "failed"
 			finalError = fmt.Sprintf("codebuddy exited with error: %v", waitErr)
+		}
+
+		// Include stderr tail in the error message for diagnostics when the
+		// child exits unexpectedly (crash, startup flag rejection, etc.).
+		if finalStatus == "failed" || finalStatus == "aborted" {
+			if tail := stderrBuf.Tail(); tail != "" {
+				finalError += fmt.Sprintf("\n[stderr tail]\n%s", tail)
+			}
 		}
 
 		b.cfg.Logger.Info("codebuddy finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
@@ -217,10 +262,10 @@ type codebuddyStreamEvent struct {
 }
 
 type codebuddyMessageContent struct {
-	Role    string                   `json:"role"`
-	Model   string                   `json:"model"`
-	Content []codebuddyContentBlock  `json:"content"`
-	Usage   *codebuddyUsage          `json:"usage,omitempty"`
+	Role    string                  `json:"role"`
+	Model   string                  `json:"model"`
+	Content []codebuddyContentBlock `json:"content"`
+	Usage   *codebuddyUsage         `json:"usage,omitempty"`
 }
 
 type codebuddyUsage struct {
@@ -245,10 +290,10 @@ type codebuddyContentBlock struct {
 // codebuddyBlockedArgs are flags hardcoded by the daemon that must not be
 // overridden by user-configured custom_args.
 var codebuddyBlockedArgs = map[string]blockedArgMode{
-	"-p":                blockedWithValue,  // non-interactive prompt
-	"--output-format":   blockedWithValue,  // stream-json protocol
-	"--input-format":    blockedWithValue,  // stream-json protocol
-	"--permission-mode": blockedWithValue,  // bypassPermissions for autonomous operation
+	"-p":                blockedWithValue, // non-interactive prompt
+	"--output-format":   blockedWithValue, // stream-json protocol
+	"--input-format":    blockedWithValue, // stream-json protocol
+	"--permission-mode": blockedWithValue, // bypassPermissions for autonomous operation
 }
 
 func buildCodeBuddyArgs(prompt string, opts ExecOptions, logger *slog.Logger) []string {
@@ -282,4 +327,38 @@ func buildCodeBuddyArgs(prompt string, opts ExecOptions, logger *slog.Logger) []
 // interfere with child process execution.
 func buildCodeBuddyEnv(extra map[string]string) []string {
 	return buildEnv(extra)
+}
+
+// writeCodeBuddyInput sends the user prompt to codebuddy via stdin using the
+// stream-json protocol. The format is identical to Claude Code:
+// {"type":"user","message":{"role":"user","content":[{"type":"text","text":"..."}]}}
+func writeCodeBuddyInput(w io.Writer, prompt string) error {
+	data, err := buildCodeBuddyInput(prompt)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildCodeBuddyInput(prompt string) ([]byte, error) {
+	payload := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role": "user",
+			"content": []map[string]string{
+				{
+					"type": "text",
+					"text": prompt,
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("build codebuddy input: %w", err)
+	}
+	return append(data, '\n'), nil
 }
