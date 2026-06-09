@@ -267,9 +267,6 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_KIRO_PATH", "kiro-cli", "MULTICA_KIRO_MODEL"); ok {
 		agents["kiro"] = e
 	}
-	if e, ok := probe("MULTICA_CODEBUDDY_PATH", "codebuddy", "MULTICA_CODEBUDDY_MODEL"); ok {
-		agents["codebuddy"] = e
-	}
 	// agy 1.0.6 added a `--model` flag (MUL-3125), so Antigravity now takes a
 	// model env like every other backend. MULTICA_ANTIGRAVITY_MODEL seeds the
 	// daemon-wide default; its value is the exact `agy models` display string
@@ -277,8 +274,29 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if e, ok := probe("MULTICA_ANTIGRAVITY_PATH", "agy", "MULTICA_ANTIGRAVITY_MODEL"); ok {
 		agents["antigravity"] = e
 	}
+
+	// Load user-installed runtime extensions from ~/.multica/runtimes/.
+	// Each subdirectory with a runtime.json becomes a discoverable agent
+	// provider without requiring a MULTICA_*_PATH env var. Runtime
+	// extensions use the ACP protocol (acp-stdio transport) and are
+	// registered with the manifest's provider key.
+	extManifests, extErr := LoadRuntimeManifests(DefaultRuntimesDir())
+	if extErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to load runtime extensions: %v\n", extErr)
+	}
+	for _, m := range extManifests {
+		if _, exists := agents[m.Provider]; exists {
+			fmt.Fprintf(os.Stderr, "warning: runtime extension %q conflicts with built-in provider %q, skipping\n", m.ID, m.Provider)
+			continue
+		}
+		agents[m.Provider] = AgentEntry{
+			Path:  m.Command.Executable,
+			Model: m.Env["MULTICA_MODEL"],
+		}
+	}
+
 	if len(agents) == 0 {
-		return Config{}, fmt.Errorf("no agent CLI found: install claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor-agent, kimi, kiro-cli, or agy and ensure it is on PATH")
+		return Config{}, fmt.Errorf("no agent CLI found: install claude, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor-agent, kimi, kiro-cli, agy, or place runtime extensions in %s", DefaultRuntimesDir())
 	}
 
 	claudeArgs, err := shellArgsFromEnv("MULTICA_CLAUDE_ARGS")
