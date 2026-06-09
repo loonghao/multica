@@ -101,10 +101,6 @@ func ListModels(ctx context.Context, providerType, executablePath string) ([]Mod
 		models := codexStaticModels()
 		annotateCodexThinking(ctx, models, executablePath)
 		return models, nil
-	case "codebuddy":
-		return cachedDiscovery(providerType, func() ([]Model, error) {
-			return discoverCodeBuddyModels(ctx, executablePath)
-		})
 	case "gemini":
 		return geminiStaticModels(), nil
 	case "antigravity":
