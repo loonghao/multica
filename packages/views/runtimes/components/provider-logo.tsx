@@ -192,15 +192,36 @@ function KiroLogo({ className }: { className: string }) {
   );
 }
 
-// CodeBuddy (Tencent) — stylized "CB" wordmark in Tencent brand blue
+// CodeBuddy (Tencent) — official CodeBuddy logo: gradient purple hexagon
+// with abstract "CB" monogram shape and teal accent circles.
+// Source: https://raw.githubusercontent.com/jasonwang82/codebuddy-code-zed/main/codebuddy.svg
 function CodeBuddyLogo({ className }: { className: string }) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" className={className}>
-      <rect width="24" height="24" rx="6" fill="#0052D9" />
-      <path
-        d="M6 6h3.5v5.2l4.2-5.2h3.2l-4.5 5.4L17 18h-3.2l-3.4-5.6L9 13.5V18H6V6z"
-        fill="#FFFFFF"
-      />
+    <svg viewBox="0 0 86 86" fill="none" className={className}>
+      <defs>
+        <linearGradient id="cb-bg" x1="43" y1="0" x2="43" y2="86" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#6C4DFF" />
+          <stop offset="1" stopColor="#583ED3" />
+        </linearGradient>
+        <linearGradient id="cb-fg" x1="32.3" y1="21.4" x2="69.9" y2="86.5" gradientUnits="userSpaceOnUse">
+          <stop stopColor="white" stopOpacity="0.8" />
+          <stop offset="0.44" stopColor="white" />
+        </linearGradient>
+        <clipPath id="cb-clip">
+          <rect width="86" height="86" rx="21.5" fill="white" />
+        </clipPath>
+      </defs>
+      <g clipPath="url(#cb-clip)">
+        <rect width="86" height="86" fill="url(#cb-bg)" />
+        <circle cx="27.1" cy="75.2" r="30.3" fill="#32E6B9" fillOpacity="0.4" filter="url(#cb-blur1)" />
+        <circle cx="71.7" cy="93.8" r="27.7" fill="#32E6B9" filter="url(#cb-blur2)" />
+        <path
+          d="M60.3 5.5c.8-.8.8-.8 1.4-.8 1-.1 1.8.4 3.3 1.7 3.4 3.1 8.1 9.5 11.1 14.9l1.1 2.1 1.6.8c1.6.8 4.1 2.4 5.2 3.3.5.4.5.4 1 .2 2.3-.9 5.5.3 8.4 3 2.5 2.5 5 6.7 5.9 10.2.2.6.3 1.8.4 2.7.2 3.2-.8 5.7-2.8 6.9-.4.2-.4.3-.4 1.3.1 4.8-1.2 9.5-3.8 14.1-2.9 5.2-8.1 10.6-15.1 15.7-3.8 2.7-12.7 7.9-16.7 9.8-9.6 4.3-17.4 6-24.1 5.2-4-.5-8.5-2.1-11.2-3.9-.7-.5-.8-.5-1.4-.4-2.8.8-6.6-.9-9.8-4.4-1.3-1.4-3.3-4.9-4-6.8-1.5-4.4-1.2-8.3.8-10.6.5-.6.6-.6.5-1.7-.2-1.6-.3-4.1-.2-5.7l.1-1.5-2.3-3.9c-3.4-6.2-5.6-11.3-6.5-15.3-.4-2.2-.4-3.1.2-3.8.3-.5 1.4-.9 2.7-1.2 3.4-.5 10.6 0 18.7 1.4l.8.2 1.9-1.7c3-2.7 5.1-4.2 8.8-6.5 3.9-2.5 8.3-4.5 13.3-6.1l1.6-.5.9-2.3c3.1-8.3 6.3-14.4 8.6-16.4zM34 47.9c-3.5 2-5.3 3-6.6 4.2-5.3 4.6-7.2 12-5 18.6.6 1.7 1.6 3.4 3.7 7 2 3.5 3 5.3 4.2 6.6 4.6 5.3 12 7.2 18.6 5 .6-.5 1.4-1.6 5-3.6l20.3-11.8c3.6-2 5.3-3.1 6.6-4.2 5.3-4.6 7.3-12 5-18.6-.5-1.7-1.5-3.4-3.6-7-2-3.5-3.1-5.3-4.2-6.6-4.7-5.3-12-7.2-18.6-5-.6.6-1.4 1.6-5 3.6L34 47.9z"
+          fill="url(#cb-fg)"
+        />
+        <rect x="36" y="62.1" width="8" height="16.7" rx="4" transform="rotate(-30 36 62.1)" fill="white" />
+        <rect x="57.7" y="49.6" width="8" height="16.7" rx="4" transform="rotate(-30 57.7 49.6)" fill="white" />
+      </g>
     </svg>
   );
 }
