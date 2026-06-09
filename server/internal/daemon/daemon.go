@@ -2579,6 +2579,12 @@ func providerNeedsInlineSystemPrompt(provider string) bool {
 	}
 }
 
+// providerNeedsInlineSystemPromptForEntry checks whether an external
+// runtime entry declares the inline_system_prompt capability.
+func providerNeedsInlineSystemPromptForEntry(entry AgentEntry) bool {
+	return entry.IsExternal && entry.Caps() != nil && entry.Caps().InlineSystemPrompt
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
@@ -2725,6 +2731,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	runtimeBrief, err := execenv.InjectRuntimeConfig(env.WorkDir, provider, taskCtx)
 	if err != nil {
 		d.logger.Warn("execenv: inject runtime config failed (non-fatal)", "error", err)
+	}
+	// For external runtime extensions, also inject config using the
+	// manifest-declared config file (e.g. "AGENTS.md").
+	if entry.ConfigFile != "" {
+		if _, err := execenv.InjectRuntimeConfigForEntry(env.WorkDir, entry.ConfigFile, taskCtx); err != nil {
+			d.logger.Warn("execenv: inject external runtime config failed (non-fatal)", "error", err)
+		}
 	}
 	// Workdir is preserved for reuse by future tasks on the same (agent,
 	// issue) pair in cloud mode; the work_dir path is stored in DB on task
