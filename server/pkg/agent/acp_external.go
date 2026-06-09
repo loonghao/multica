@@ -14,12 +14,22 @@ import (
 )
 
 // acpExternalBackend implements Backend for external runtime extensions
-// loaded from runtime.json. It spawns the CLI with ACP protocol args
-// (--acp) and drives the ACP JSON-RPC 2.0 handshake over stdin/stdout.
+// loaded from runtime.json. It spawns the CLI with the manifest-declared
+// command args (typically `--acp`) and drives an ACP JSON-RPC 2.0 handshake
+// over stdin/stdout.
 //
-// This is a lightweight ACP client that only supports the subset of ACP
-// needed for non-interactive task execution: initialize → session/new →
-// session/prompt → drain events → session/close.
+// Capability-driven parameter forwarding: optional ACP `session/new` params
+// (mcpServers, sessionId, thinkingLevel, maxTurns) are only forwarded when
+// the manifest opts in via capabilities, so a runtime that ignores extra
+// params doesn't see noise it might reject. The contract is:
+//
+//   - mcp_config         → params.mcpServers (array of {name,command,args,env})
+//   - session_resume     → params.sessionId  (resume an existing session)
+//   - max_turns          → params.maxTurns
+//   - thinking           → params.thinkingLevel
+//   - model_selection    → params.model      (always forwarded; gated by opt-in)
+//
+// All forwarded params are also subject to opts.* being non-empty / non-zero.
 type acpExternalBackend struct {
 	cfg Config
 }
@@ -36,8 +46,10 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 	timeout := opts.Timeout
 	runCtx, cancel := runContext(ctx, timeout)
 
+	blocked := manifestBlockedArgs(b.cfg.BlockedArgs)
 	args := append([]string{}, b.cfg.ACPArgs...)
-	args = append(args, filterCustomArgs(opts.CustomArgs, nil, b.cfg.Logger)...)
+	args = append(args, filterCustomArgs(opts.ExtraArgs, blocked, b.cfg.Logger)...)
+	args = append(args, filterCustomArgs(opts.CustomArgs, blocked, b.cfg.Logger)...)
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
 	hideAgentWindow(cmd)
@@ -46,7 +58,7 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
-	cmd.Env = buildEnv(b.cfg.Env)
+	cmd.Env = buildEnv(mergeRuntimeEnv(b.cfg.Env, b.cfg.SkillsRoot))
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -137,12 +149,9 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 			}
 		}
 
-		// Phase 2: session/new.
+		// Phase 2: session/new — forward optional params per capability flags.
 		{
-			sessionParams := map[string]any{"cwd": opts.Cwd}
-			if opts.Model != "" {
-				sessionParams["model"] = opts.Model
-			}
+			sessionParams := buildACPSessionParams(opts, b.cfg.Capabilities)
 			if err := writeJSON(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      reqID.Add(1),
@@ -221,6 +230,7 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 		}
 
 	finish:
+		closeStdin()
 		waitErr := cmd.Wait()
 		duration := time.Since(startTime)
 
@@ -255,6 +265,80 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 	}()
 
 	return &Session{Messages: msgCh, Result: resCh}, nil
+}
+
+// buildACPSessionParams assembles the params object for the ACP `session/new`
+// request, forwarding optional fields only when the manifest opted in to the
+// matching capability AND opts.* carries a value. Keeping the gate explicit
+// means a runtime that doesn't tolerate extra fields stays opt-in safe, while
+// one that does can expose model/MCP/thinking simply by setting capability
+// flags to `true` in runtime.json.
+func buildACPSessionParams(opts ExecOptions, caps ConfigCapabilities) map[string]any {
+	params := map[string]any{}
+	if opts.Cwd != "" {
+		params["cwd"] = opts.Cwd
+	}
+	if caps.ModelSelection && opts.Model != "" {
+		params["model"] = opts.Model
+	}
+	if caps.SessionResume && opts.ResumeSessionID != "" {
+		params["sessionId"] = opts.ResumeSessionID
+	}
+	if caps.MaxTurns && opts.MaxTurns > 0 {
+		params["maxTurns"] = opts.MaxTurns
+	}
+	if caps.Thinking && opts.ThinkingLevel != "" {
+		params["thinkingLevel"] = opts.ThinkingLevel
+	}
+	if caps.McpConfig && len(opts.McpConfig) > 0 {
+		// Translate the daemon's MCP config (raw JSON, may be either an
+		// object-of-objects { name: { command, args, env } } or already
+		// an ACP-shaped { mcpServers: [...] }) into the array shape ACP
+		// `session/new` expects. Failures fall back to passing the raw
+		// message through under "mcpConfig" so a runtime that wants the
+		// untranslated payload can still consume it.
+		if servers, ok := normalizeMCPServers(opts.McpConfig); ok {
+			params["mcpServers"] = servers
+		} else {
+			params["mcpConfig"] = json.RawMessage(opts.McpConfig)
+		}
+	}
+	return params
+}
+
+// normalizeMCPServers accepts either of the two MCP config shapes the
+// daemon may carry and returns an ACP-style array of server descriptors.
+//
+//	Shape A (Claude-style): {"name":{"command":"x","args":[...],"env":{...}}}
+//	Shape B (ACP-native):   {"mcpServers":[{"name":"x", ...}]}
+//
+// Returns the array and true on success; (nil, false) when the payload
+// cannot be parsed into a recognised shape.
+func normalizeMCPServers(raw json.RawMessage) ([]map[string]any, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	// Try shape B first.
+	var direct struct {
+		McpServers []map[string]any `json:"mcpServers"`
+	}
+	if err := json.Unmarshal(raw, &direct); err == nil && len(direct.McpServers) > 0 {
+		return direct.McpServers, true
+	}
+	// Fall back to shape A.
+	var byName map[string]map[string]any
+	if err := json.Unmarshal(raw, &byName); err == nil && len(byName) > 0 {
+		out := make([]map[string]any, 0, len(byName))
+		for name, srv := range byName {
+			entry := map[string]any{"name": name}
+			for k, v := range srv {
+				entry[k] = v
+			}
+			out = append(out, entry)
+		}
+		return out, true
+	}
+	return nil, false
 }
 
 // skipToResponse reads JSON-RPC frames from decoder until it finds one
@@ -326,4 +410,44 @@ func (b *acpExternalBackend) handleToolResult(params map[string]any, ch chan<- M
 		CallID: callID,
 		Output: content,
 	})
+}
+
+// manifestBlockedArgs converts the manifest's string-valued blocked-args map
+// into the internal blockedArgMode form filterCustomArgs consumes. Manifest
+// values are expected to be either "value" (flag takes a value, blocked
+// together with its argument) or "flag" (boolean flag, no value to skip).
+// Unknown values default to "value" since that is the safer interpretation
+// — an extra argv slot is dropped rather than a real positional being
+// shifted into the blocked flag's slot.
+func manifestBlockedArgs(in map[string]string) map[string]blockedArgMode {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]blockedArgMode, len(in))
+	for flag, mode := range in {
+		switch strings.ToLower(strings.TrimSpace(mode)) {
+		case "flag", "standalone", "bool", "boolean":
+			out[flag] = blockedStandalone
+		default:
+			out[flag] = blockedWithValue
+		}
+	}
+	return out
+}
+
+// mergeRuntimeEnv augments the daemon-supplied env map with manifest-declared
+// env entries and the optional MULTICA_AGENT_SKILLS_ROOT pointer. Existing
+// keys in `extra` win — the daemon already injects task-scoped credentials
+// through it and a manifest must not be able to clobber them.
+func mergeRuntimeEnv(extra map[string]string, skillsRoot string) map[string]string {
+	out := make(map[string]string, len(extra)+2)
+	for k, v := range extra {
+		out[k] = v
+	}
+	if skillsRoot != "" {
+		if _, set := out["MULTICA_AGENT_SKILLS_ROOT"]; !set {
+			out["MULTICA_AGENT_SKILLS_ROOT"] = skillsRoot
+		}
+	}
+	return out
 }

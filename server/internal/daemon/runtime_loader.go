@@ -42,6 +42,10 @@ type RuntimeManifestCommand struct {
 }
 
 // RuntimeManifestCaps declares which optional features the runtime supports.
+// Capabilities are advisory: declaring `thinking: true` does not magically
+// teach the daemon a new flag — it tells the wire layer to forward
+// `opts.ThinkingLevel` instead of dropping it. Capabilities the daemon does
+// not yet read are reserved for forward compatibility (frontend filtering).
 type RuntimeManifestCaps struct {
 	Thinking           bool `json:"thinking,omitempty"`
 	McpConfig          bool `json:"mcp_config,omitempty"`
@@ -50,6 +54,13 @@ type RuntimeManifestCaps struct {
 	MaxTurns           bool `json:"max_turns,omitempty"`
 	ModelSelection     bool `json:"model_selection,omitempty"`
 	LocalSkills        bool `json:"local_skills,omitempty"`
+	SlashCommands      bool `json:"slash_commands,omitempty"`
+	ToolCalls          bool `json:"tool_calls,omitempty"`
+	Attachments        bool `json:"attachments,omitempty"`
+	ImageInput         bool `json:"image_input,omitempty"`
+	WebSearch          bool `json:"web_search,omitempty"`
+	CustomArgs         bool `json:"custom_args,omitempty"`
+	ExtraArgs          bool `json:"extra_args,omitempty"`
 }
 
 // RuntimeManifestModel describes a model exposed by the runtime.
@@ -68,6 +79,14 @@ type RuntimePricing struct {
 	CacheWrite float64 `json:"cacheWrite,omitempty"`
 }
 
+// SupportedTransports lists the transport strings the daemon understands. A
+// manifest declaring an unknown transport is rejected at load time rather
+// than at task spawn time so misconfiguration surfaces during startup.
+var SupportedTransports = map[string]struct{}{
+	"acp-stdio":   {},
+	"stream-json": {},
+}
+
 // ToAgentEntry converts a runtime manifest into a daemon AgentEntry for
 // registration. The transport field determines how the daemon spawns the
 // CLI at task time.
@@ -77,19 +96,38 @@ func (m RuntimeManifest) ToAgentEntry() AgentEntry {
 		transport = "acp-stdio"
 	}
 	return AgentEntry{
-		Path:         m.Command.Executable,
-		Transport:    transport,
-		ACPArgs:      m.Command.Args,
-		IsExternal:   true,
-		LaunchHeader: m.LaunchHeader,
-		ConfigFile:   m.ConfigFile,
-		SkillsRoot:   m.SkillsRoot,
-		IconURL:      m.IconURL,
-		Models:       manifestModelsToAgentModels(m.Models),
-		Pricing:      m.Pricing,
-		ManifestName: m.Name,
-		rawCaps:      m.Capabilities,
+		Path:          m.Command.Executable,
+		Transport:     transport,
+		ExtraArgs:     append([]string(nil), m.Command.Args...),
+		ACPArgs:       append([]string(nil), m.Command.Args...),
+		IsExternal:    true,
+		LaunchHeader:  m.LaunchHeader,
+		ConfigFile:    m.ConfigFile,
+		SkillsRoot:    m.SkillsRoot,
+		IconURL:       m.IconURL,
+		Models:        manifestModelsToAgentModels(m.Models),
+		Pricing:       m.Pricing,
+		ManifestName:  m.Name,
+		ManifestID:    m.ID,
+		Provider:      m.Provider,
+		Description:   m.Description,
+		Version:       m.Version,
+		MinCLIVersion: m.MinCLIVersion,
+		BlockedArgs:   copyStringMap(m.Command.BlockedArgs),
+		Env:           copyStringMap(m.Env),
+		rawCaps:       m.Capabilities,
 	}
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func manifestModelsToAgentModels(models []RuntimeManifestModel) []AgentModel {
@@ -162,6 +200,22 @@ func LoadRuntimeManifests(rootDir string) ([]RuntimeManifest, error) {
 		if len(missing) > 0 {
 			fmt.Fprintf(os.Stderr, "warning: runtime manifest %s missing required fields: %s\n", manifestPath, strings.Join(missing, ", "))
 			continue
+		}
+
+		// Reject unknown transports up front. We allow the empty string
+		// (defaults to acp-stdio in ToAgentEntry) to keep older manifests
+		// readable, but anything else must be in SupportedTransports so
+		// `agent.New()` can route to a real backend.
+		if m.Transport != "" {
+			if _, ok := SupportedTransports[m.Transport]; !ok {
+				supported := make([]string, 0, len(SupportedTransports))
+				for k := range SupportedTransports {
+					supported = append(supported, k)
+				}
+				fmt.Fprintf(os.Stderr, "warning: runtime manifest %s declares unsupported transport %q (supported: %s)\n",
+					manifestPath, m.Transport, strings.Join(supported, ", "))
+				continue
+			}
 		}
 
 		manifests = append(manifests, m)
