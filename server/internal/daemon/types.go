@@ -4,11 +4,32 @@ import "encoding/json"
 
 // AgentEntry describes a single available agent CLI.
 type AgentEntry struct {
-	Path       string // path to CLI binary
-	Model      string // model override (optional)
-	Transport  string // "stream-json" (default) or "acp-stdio" (from runtime.json)
-	ACPArgs    []string // extra args for ACP mode (from runtime.json)
-	IsExternal bool     // true when loaded from runtime.json
+	Path         string                   // path to CLI binary
+	Model        string                   // model override (optional)
+	Transport    string                   // "stream-json" (default) or "acp-stdio" (from runtime.json)
+	ACPArgs      []string                 // extra args for ACP mode (from runtime.json)
+	IsExternal   bool                     // true when loaded from runtime.json
+	LaunchHeader string                   // user-visible launch skeleton
+	ConfigFile   string                   // runtime config file name ("AGENTS.md", "CLAUDE.md", "" to skip)
+	SkillsRoot   string                   // local skills root directory
+	IconURL      string                   // provider icon URL
+	Models       []AgentModel             // static model list (from runtime.json)
+	Pricing      map[string]RuntimePricing // model pricing info
+	ManifestName string                   // display name from manifest
+	rawCaps      *RuntimeManifestCaps     // internal capability reference
+}
+
+// Caps returns the manifest capabilities if this entry is external.
+func (e AgentEntry) Caps() *RuntimeManifestCaps {
+	return e.rawCaps
+}
+
+// AgentModel is a model entry from a runtime.json manifest.
+type AgentModel struct {
+	ID       string   `json:"id"`
+	Label    string   `json:"label,omitempty"`
+	Default  bool     `json:"default,omitempty"`
+	Thinking []string `json:"thinking,omitempty"`
 }
 
 // Runtime represents a registered daemon runtime.
