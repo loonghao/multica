@@ -141,7 +141,7 @@ describe("StepRuntimeConnect — onboarding_runtime_detected", () => {
     const props = mocks.captureEvent.mock.calls[0]![1] as Record<string, unknown>;
     expect(props.runtime_count).toBe(4);
     expect(props.online_count).toBe(3);
-    expect(props.providers).toEqual(["claude", "codex", "cursor", "codebuddy"]);
+    expect(props.providers).toEqual(["claude", "codebuddy", "codex", "cursor"]);
     expect(props.has_claude).toBe(true);
     expect(props.has_codebuddy).toBe(true);
     expect(props.has_codex).toBe(true);
