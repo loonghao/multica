@@ -192,6 +192,19 @@ function KiroLogo({ className }: { className: string }) {
   );
 }
 
+// CodeBuddy (Tencent) — stylized "CB" wordmark in Tencent brand blue
+function CodeBuddyLogo({ className }: { className: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className}>
+      <rect width="24" height="24" rx="6" fill="#0052D9" />
+      <path
+        d="M6 6h3.5v5.2l4.2-5.2h3.2l-4.5 5.4L17 18h-3.2l-3.4-5.6L9 13.5V18H6V6z"
+        fill="#FFFFFF"
+      />
+    </svg>
+  );
+}
+
 export function ProviderLogo({
   provider,
   className = "h-4 w-4",
@@ -202,6 +215,8 @@ export function ProviderLogo({
   switch (provider) {
     case "claude":
       return <ClaudeLogo className={className} />;
+    case "codebuddy":
+      return <CodeBuddyLogo className={className} />;
     case "codex":
       return <CodexLogo className={className} />;
     case "opencode":

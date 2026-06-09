@@ -8,6 +8,7 @@
 // through ExecOptions.
 const MCP_SUPPORTED_PROVIDERS = new Set([
   "claude",
+  "codebuddy",
   "codex",
   "hermes",
   "kimi",
