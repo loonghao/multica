@@ -278,8 +278,8 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// Load user-installed runtime extensions from ~/.multica/runtimes/.
 	// Each subdirectory with a runtime.json becomes a discoverable agent
 	// provider without requiring a MULTICA_*_PATH env var. Runtime
-	// extensions use the ACP protocol (acp-stdio transport) and are
-	// registered with the manifest's provider key.
+	// extensions support both the ACP (acp-stdio) and stream-json
+	// transports and are registered with the manifest's provider key.
 	extManifests, extErr := LoadRuntimeManifests(DefaultRuntimesDir())
 	if extErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to load runtime extensions: %v\n", extErr)
@@ -289,7 +289,23 @@ func LoadConfig(overrides Overrides) (Config, error) {
 			fmt.Fprintf(os.Stderr, "warning: runtime extension %q conflicts with built-in provider %q, skipping\n", m.ID, m.Provider)
 			continue
 		}
-		agents[m.Provider] = m.ToAgentEntry()
+		entry := m.ToAgentEntry()
+		// Best-effort version probe: if the manifest declares a minimum
+		// CLI version and we can detect the installed version, surface a
+		// non-fatal warning when the installed version is older. The
+		// manifest still loads — operators can choose to upgrade after
+		// seeing the warning, which avoids a hard-fail boot loop on a
+		// version string the daemon can't parse (build SHAs etc.).
+		if entry.MinCLIVersion != "" {
+			if detected, err := probeManifestCLIVersion(entry.Path); err == nil && detected != "" {
+				entry.DetectedVer = detected
+				if cmpErr := compareSemver(detected, entry.MinCLIVersion); cmpErr != nil {
+					entry.VersionWarning = cmpErr.Error()
+					fmt.Fprintf(os.Stderr, "warning: runtime extension %q: %s\n", m.ID, cmpErr.Error())
+				}
+			}
+		}
+		agents[m.Provider] = entry
 	}
 
 	if len(agents) == 0 {

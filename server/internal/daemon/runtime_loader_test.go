@@ -18,15 +18,35 @@ func TestLoadRuntimeManifests(t *testing.T) {
 		t.Fatal(err)
 	}
 	valid := RuntimeManifest{
-		ID:       "codebuddy",
-		Name:     "CodeBuddy Code",
-		Version:  "1.0.0",
-		Provider: "codebuddy",
+		ID:        "codebuddy",
+		Name:      "CodeBuddy Code",
+		Version:   "1.0.0",
+		Provider:  "codebuddy",
 		Transport: "acp-stdio",
 		Command: RuntimeManifestCommand{
-			Executable: "codebuddy",
-			Args:       []string{"--acp"},
+			Executable:  "codebuddy",
+			Args:        []string{"--acp"},
+			BlockedArgs: map[string]string{"--output-format": "value"},
 		},
+		Capabilities: &RuntimeManifestCaps{
+			Thinking:       true,
+			McpConfig:      true,
+			ModelSelection: true,
+			SessionResume:  true,
+			MaxTurns:       true,
+			ToolCalls:      true,
+			Attachments:    true,
+		},
+		Models: []RuntimeManifestModel{
+			{ID: "deepseek-v4-pro-ioa", Label: "DeepSeek V4 Pro", Default: true, Thinking: []string{"none", "low", "high"}},
+		},
+		Pricing: map[string]RuntimePricing{
+			"deepseek-v4-pro-ioa": {Input: 0.5, Output: 1.5, CacheRead: 0.05},
+		},
+		Env:           map[string]string{"FOO": "bar"},
+		MinCLIVersion: "1.0.0",
+		IconURL:       "https://example.com/icon.png",
+		Description:   "CodeBuddy reference runtime",
 	}
 	data, _ := json.MarshalIndent(valid, "", "  ")
 	if err := os.WriteFile(filepath.Join(subDir, "runtime.json"), data, 0o644); err != nil {
@@ -42,6 +62,40 @@ func TestLoadRuntimeManifests(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Manifest with an unsupported transport — must be skipped at load.
+	badTransportDir := filepath.Join(dir, "badtransport")
+	if err := os.MkdirAll(badTransportDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bad := RuntimeManifest{
+		ID:        "bad",
+		Name:      "Bad",
+		Provider:  "bad",
+		Transport: "carrier-pigeon",
+		Command:   RuntimeManifestCommand{Executable: "/usr/bin/true"},
+	}
+	data, _ = json.Marshal(bad)
+	if err := os.WriteFile(filepath.Join(badTransportDir, "runtime.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Stream-json transport should load fine.
+	streamDir := filepath.Join(dir, "stream")
+	if err := os.MkdirAll(streamDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stream := RuntimeManifest{
+		ID:        "stream",
+		Name:      "Stream",
+		Provider:  "stream",
+		Transport: "stream-json",
+		Command:   RuntimeManifestCommand{Executable: "/usr/bin/true"},
+	}
+	data, _ = json.Marshal(stream)
+	if err := os.WriteFile(filepath.Join(streamDir, "runtime.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	// Create a directory without runtime.json — should be skipped silently.
 	emptyDir := filepath.Join(dir, "empty")
 	if err := os.MkdirAll(emptyDir, 0o755); err != nil {
@@ -52,12 +106,20 @@ func TestLoadRuntimeManifests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRuntimeManifests: %v", err)
 	}
-	if len(manifests) != 1 {
-		t.Fatalf("expected 1 manifest, got %d", len(manifests))
+	if len(manifests) != 2 {
+		t.Fatalf("expected 2 manifests (codebuddy+stream), got %d", len(manifests))
 	}
-	m := manifests[0]
-	if m.ID != "codebuddy" {
-		t.Errorf("id = %q, want codebuddy", m.ID)
+
+	// Find the codebuddy manifest
+	var m RuntimeManifest
+	for _, x := range manifests {
+		if x.ID == "codebuddy" {
+			m = x
+			break
+		}
+	}
+	if m.ID == "" {
+		t.Fatalf("codebuddy manifest not loaded")
 	}
 	if m.Provider != "codebuddy" {
 		t.Errorf("provider = %q, want codebuddy", m.Provider)
@@ -70,6 +132,109 @@ func TestLoadRuntimeManifests(t *testing.T) {
 	}
 	if len(m.Command.Args) != 1 || m.Command.Args[0] != "--acp" {
 		t.Errorf("command.args = %v, want [--acp]", m.Command.Args)
+	}
+	if got := m.Command.BlockedArgs["--output-format"]; got != "value" {
+		t.Errorf("blocked_args lost: %v", m.Command.BlockedArgs)
+	}
+	if !m.Capabilities.ToolCalls {
+		t.Errorf("capabilities.tool_calls not preserved: %+v", m.Capabilities)
+	}
+}
+
+// TestRuntimeManifestToAgentEntryPropagatesEverything makes sure every
+// new field added to RuntimeManifest also gets copied into AgentEntry.
+// A future addition that forgets to extend ToAgentEntry will fail this
+// test, which is much cheaper than discovering the gap at runtime.
+func TestRuntimeManifestToAgentEntryPropagatesEverything(t *testing.T) {
+	t.Parallel()
+	m := RuntimeManifest{
+		ID:            "rt-full",
+		Name:          "Full Runtime",
+		Provider:      "rt-full",
+		Version:       "2.0.1",
+		Description:   "fully populated",
+		Transport:     "stream-json",
+		LaunchHeader:  "rt-full --serve",
+		IconURL:       "https://example.com/x.png",
+		ConfigFile:    "AGENTS.md",
+		SkillsRoot:    "/var/skills",
+		MinCLIVersion: "1.2.3",
+		Env: map[string]string{
+			"RT_API_KEY": "test",
+		},
+		Command: RuntimeManifestCommand{
+			Executable:  "/usr/bin/rt",
+			Args:        []string{"--serve"},
+			BlockedArgs: map[string]string{"--output-format": "value"},
+		},
+		Capabilities: &RuntimeManifestCaps{
+			Thinking:           true,
+			McpConfig:          true,
+			InlineSystemPrompt: true,
+			SessionResume:      true,
+			MaxTurns:           true,
+			ModelSelection:     true,
+			LocalSkills:        true,
+			SlashCommands:      true,
+			ToolCalls:          true,
+			Attachments:        true,
+			ImageInput:         true,
+			WebSearch:          true,
+			CustomArgs:         true,
+			ExtraArgs:          true,
+		},
+		Models: []RuntimeManifestModel{
+			{ID: "model-a", Label: "Model A", Default: true},
+		},
+		Pricing: map[string]RuntimePricing{
+			"model-a": {Input: 1, Output: 2},
+		},
+	}
+	entry := m.ToAgentEntry()
+	if entry.Path != "/usr/bin/rt" {
+		t.Errorf("path lost")
+	}
+	if entry.Transport != "stream-json" {
+		t.Errorf("transport lost: %q", entry.Transport)
+	}
+	if entry.LaunchHeader != "rt-full --serve" {
+		t.Errorf("launch header lost")
+	}
+	if entry.IconURL != "https://example.com/x.png" {
+		t.Errorf("icon url lost")
+	}
+	if entry.SkillsRoot != "/var/skills" {
+		t.Errorf("skills root lost")
+	}
+	if entry.MinCLIVersion != "1.2.3" {
+		t.Errorf("min cli version lost")
+	}
+	if entry.Env["RT_API_KEY"] != "test" {
+		t.Errorf("env lost: %v", entry.Env)
+	}
+	if entry.BlockedArgs["--output-format"] != "value" {
+		t.Errorf("blocked args lost: %v", entry.BlockedArgs)
+	}
+	if !entry.HasCapability("tool_calls") {
+		t.Errorf("tool_calls capability lost")
+	}
+	if !entry.HasCapability("custom_args") {
+		t.Errorf("custom_args capability lost")
+	}
+	if entry.Caps() == nil || !entry.Caps().Thinking {
+		t.Errorf("caps pointer lost")
+	}
+	if len(entry.Models) != 1 || entry.Models[0].ID != "model-a" {
+		t.Errorf("models lost: %v", entry.Models)
+	}
+	if entry.Pricing["model-a"].Output != 2 {
+		t.Errorf("pricing lost: %v", entry.Pricing)
+	}
+	if !entry.IsExternal {
+		t.Errorf("IsExternal must be true for manifest-loaded entries")
+	}
+	if entry.Description != "fully populated" {
+		t.Errorf("description lost")
 	}
 }
 

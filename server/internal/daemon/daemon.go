@@ -741,12 +741,26 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 
 func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
-	var runtimes []map[string]string
+	var runtimes []map[string]any
 	for name, entry := range d.cfg.Agents {
 		version, err := detectAgentVersion(ctx, entry.Path)
 		if err != nil {
-			d.logger.Warn("skip registering runtime", "name", name, "error", err)
-			continue
+			// External runtimes pre-probe at startup, so a transient
+			// version-detection failure here should not drop them from the
+			// registration entirely — fall back to the cached value when
+			// present, or report "unknown" so the server still records the
+			// runtime.
+			if entry.IsExternal {
+				if entry.DetectedVer != "" {
+					version = entry.DetectedVer
+				} else {
+					version = "unknown"
+				}
+				d.logger.Warn("external runtime version probe failed; using fallback", "name", name, "fallback", version, "error", err)
+			} else {
+				d.logger.Warn("skip registering runtime", "name", name, "error", err)
+				continue
+			}
 		}
 		if err := checkAgentMinVersion(name, version); err != nil {
 			d.logger.Warn("skip registering runtime: version too old", "name", name, "version", version, "error", err)
@@ -755,15 +769,49 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		d.setAgentVersion(name, version)
 		d.logger.Debug("agent version detected", "name", name, "version", version, "path", entry.Path)
 		displayName := strings.ToUpper(name[:1]) + name[1:]
+		if entry.IsExternal && entry.ManifestName != "" {
+			displayName = entry.ManifestName
+		}
 		if d.cfg.DeviceName != "" {
 			displayName = fmt.Sprintf("%s (%s)", displayName, d.cfg.DeviceName)
 		}
-		runtimes = append(runtimes, map[string]string{
+		rtPayload := map[string]any{
 			"name":    displayName,
 			"type":    name,
 			"version": version,
 			"status":  "online",
-		})
+		}
+		// Extra metadata for external runtime extensions. The server is
+		// permissive about additional fields (older servers ignore them);
+		// the desktop UI consumes them when it speaks the v2 schema. This
+		// keeps the manifest authoritative for icon/pricing/capability
+		// rather than baking them into a frontend hard-coded map.
+		if entry.IsExternal {
+			rtPayload["external"] = true
+			rtPayload["transport"] = entry.Transport
+			if entry.IconURL != "" {
+				rtPayload["icon_url"] = entry.IconURL
+			}
+			if entry.Description != "" {
+				rtPayload["description"] = entry.Description
+			}
+			if caps := entry.Caps(); caps != nil {
+				rtPayload["capabilities"] = caps
+			}
+			if len(entry.Pricing) > 0 {
+				rtPayload["pricing"] = entry.Pricing
+			}
+			if len(entry.Models) > 0 {
+				rtPayload["models"] = entry.Models
+			}
+			if entry.VersionWarning != "" {
+				rtPayload["version_warning"] = entry.VersionWarning
+			}
+			if entry.MinCLIVersion != "" {
+				rtPayload["min_cli_version"] = entry.MinCLIVersion
+			}
+		}
+		runtimes = append(runtimes, rtPayload)
 	}
 	if len(runtimes) == 0 {
 		return nil, fmt.Errorf("no agent runtimes could be registered")
@@ -2673,6 +2721,27 @@ func providerNeedsInlineSystemPromptForEntry(entry AgentEntry) bool {
 	return entry.IsExternal && entry.Caps() != nil && entry.Caps().InlineSystemPrompt
 }
 
+// capabilitiesForBackend translates a registered AgentEntry's manifest caps
+// (when present) into the subset agent.Config needs at task spawn time.
+// Built-in providers fall through to a zero ConfigCapabilities — their
+// backends ignore the field and use the hard-coded behaviour the daemon has
+// always supplied. External runtimes copy each cap flag verbatim so the
+// wire layer (ACP / stream-json) can decide whether to forward each
+// optional parameter.
+func capabilitiesForBackend(entry AgentEntry) agent.ConfigCapabilities {
+	caps := entry.Caps()
+	if caps == nil {
+		return agent.ConfigCapabilities{}
+	}
+	return agent.ConfigCapabilities{
+		Thinking:       caps.Thinking,
+		McpConfig:      caps.McpConfig,
+		SessionResume:  caps.SessionResume,
+		MaxTurns:       caps.MaxTurns,
+		ModelSelection: caps.ModelSelection,
+	}
+}
+
 func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
@@ -2988,6 +3057,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			agentEnv[k] = v
 		}
 	}
+	// External runtime extensions ship their manifest's env block; merge it
+	// into the agent env BEFORE building the backend so downstream init can
+	// see manifest-declared keys. Existing entries (task token, daemon-level
+	// env) win — a manifest must not be able to clobber daemon-managed keys.
+	for k, v := range entry.Env {
+		if _, exists := agentEnv[k]; !exists {
+			agentEnv[k] = v
+		}
+	}
 	backend, err := agent.New(provider, agent.Config{
 		ExecutablePath: entry.Path,
 		Env:            agentEnv,
@@ -2995,6 +3073,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		Transport:      entry.Transport,
 		ACPArgs:        entry.ACPArgs,
 		IsExternal:     entry.IsExternal,
+		BlockedArgs:    entry.BlockedArgs,
+		SkillsRoot:     entry.SkillsRoot,
+		Capabilities:   capabilitiesForBackend(entry),
 	})
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
@@ -3101,7 +3182,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Hermes loads AGENTS.md / .agent_context itself. Prepending the full runtime
 	// brief into the ACP user prompt duplicates that context, bloats every turn,
 	// and has triggered upstream safety filters on harmless tasks.
-	if providerNeedsInlineSystemPrompt(provider) {
+	if providerNeedsInlineSystemPrompt(provider) || providerNeedsInlineSystemPromptForEntry(entry) {
 		execOpts.SystemPrompt = runtimeBrief
 	}
 

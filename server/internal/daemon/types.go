@@ -4,24 +4,77 @@ import "encoding/json"
 
 // AgentEntry describes a single available agent CLI.
 type AgentEntry struct {
-	Path         string                   // path to CLI binary
-	Model        string                   // model override (optional)
-	Transport    string                   // "stream-json" (default) or "acp-stdio" (from runtime.json)
-	ACPArgs      []string                 // extra args for ACP mode (from runtime.json)
-	IsExternal   bool                     // true when loaded from runtime.json
-	LaunchHeader string                   // user-visible launch skeleton
-	ConfigFile   string                   // runtime config file name ("AGENTS.md", "CLAUDE.md", "" to skip)
-	SkillsRoot   string                   // local skills root directory
-	IconURL      string                   // provider icon URL
-	Models       []AgentModel             // static model list (from runtime.json)
-	Pricing      map[string]RuntimePricing // model pricing info
-	ManifestName string                   // display name from manifest
-	rawCaps      *RuntimeManifestCaps     // internal capability reference
+	Path           string                    // path to CLI binary
+	Model          string                    // model override (optional)
+	Transport      string                    // "stream-json" (default) or "acp-stdio" (from runtime.json)
+	ExtraArgs      []string                  // extra args appended to every invocation (from runtime.json command.args)
+	ACPArgs        []string                  // alias of ExtraArgs kept for backwards-compat (deprecated; reads ExtraArgs)
+	IsExternal     bool                      // true when loaded from runtime.json
+	LaunchHeader   string                    // user-visible launch skeleton
+	ConfigFile     string                    // runtime config file name ("AGENTS.md", "CLAUDE.md", "" to skip)
+	SkillsRoot     string                    // local skills root directory passed via MULTICA_AGENT_SKILLS_ROOT
+	IconURL        string                    // provider icon URL
+	Models         []AgentModel              // static model list (from runtime.json)
+	Pricing        map[string]RuntimePricing // model pricing info
+	ManifestName   string                    // display name from manifest
+	ManifestID     string                    // manifest id (used for diagnostics & logs)
+	Provider       string                    // provider key (mirrors agents map key)
+	Description    string                    // human-readable description from manifest
+	Version        string                    // manifest version
+	MinCLIVersion  string                    // minimum runtime CLI version (semver) declared in manifest
+	DetectedVer    string                    // version reported by `<exec> --version` at startup (best-effort)
+	VersionWarning string                    // populated when DetectedVer < MinCLIVersion (non-fatal)
+	BlockedArgs    map[string]string         // flag → "flag" or "value"; protocol-critical args refused from custom_args
+	Env            map[string]string         // additional environment variables to inject into spawned CLI
+	rawCaps        *RuntimeManifestCaps      // internal capability reference
 }
 
 // Caps returns the manifest capabilities if this entry is external.
+// Returns nil for built-in providers; callers should treat that as "use the
+// provider's hard-coded capability set".
 func (e AgentEntry) Caps() *RuntimeManifestCaps {
 	return e.rawCaps
+}
+
+// HasCapability reports whether the entry's manifest opts in to the named
+// capability. Built-in providers return false (they don't ship a manifest);
+// callers needing built-in capability awareness should check by provider name.
+func (e AgentEntry) HasCapability(name string) bool {
+	c := e.rawCaps
+	if c == nil {
+		return false
+	}
+	switch name {
+	case "thinking":
+		return c.Thinking
+	case "mcp_config":
+		return c.McpConfig
+	case "inline_system_prompt":
+		return c.InlineSystemPrompt
+	case "session_resume":
+		return c.SessionResume
+	case "max_turns":
+		return c.MaxTurns
+	case "model_selection":
+		return c.ModelSelection
+	case "local_skills":
+		return c.LocalSkills
+	case "slash_commands":
+		return c.SlashCommands
+	case "tool_calls":
+		return c.ToolCalls
+	case "attachments":
+		return c.Attachments
+	case "image_input":
+		return c.ImageInput
+	case "web_search":
+		return c.WebSearch
+	case "custom_args":
+		return c.CustomArgs
+	case "extra_args":
+		return c.ExtraArgs
+	}
+	return false
 }
 
 // AgentModel is a model entry from a runtime.json manifest.
