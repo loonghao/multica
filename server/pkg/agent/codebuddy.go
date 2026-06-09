@@ -145,6 +145,10 @@ func (b *codebuddyBackend) Execute(ctx context.Context, prompt string, opts Exec
 					finalStatus = "failed"
 					finalError = evt.ResultText
 				}
+				// Close stdin after receiving the result event so the
+				// CLI knows it can exit. Without this, CodeBuddy Code
+				// may wait for further input on stdin and never terminate.
+				closeStdin()
 			}
 		}
 
