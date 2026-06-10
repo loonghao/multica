@@ -10,7 +10,7 @@ func TestExtractSemverToken(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"codebuddy 1.4.2 (Tencent)", "1.4.2"},
+		{"my-cli 1.4.2 (Company Internal)", "1.4.2"},
 		{"v0.3.18", "0.3.18"},
 		{"agent build v2.10.10-235-gabc 2024-01", "2.10.10"},
 		{"no version here", ""},

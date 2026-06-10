@@ -93,7 +93,7 @@ func TestBuildStreamJSONExternalArgsCustomArgsAppended(t *testing.T) {
 }
 
 // TestWriteStreamJSONUserFrameProducesNDJSON pins the wire frame the
-// daemon writes to stdin. The format must match Claude/CodeBuddy
+// daemon writes to stdin. The format must match Claude stream-json
 // stream-json or the receiving CLI will reject the first message and
 // exit immediately.
 func TestWriteStreamJSONUserFrameProducesNDJSON(t *testing.T) {
@@ -133,7 +133,7 @@ func TestWriteStreamJSONUserFrameProducesNDJSON(t *testing.T) {
 // TestStreamJSONExternalRouting_AgentNew sanity checks that the factory
 // hands back a streamJSONExternalBackend when transport == "stream-json".
 // This is the gate that lets an external runtime use the same parser
-// the codebuddy and claude built-ins do, without growing a new switch
+// the built-in stream-json backends do, without growing a new switch
 // case in `agent.New`.
 func TestStreamJSONExternalRouting_AgentNew(t *testing.T) {
 	t.Parallel()
