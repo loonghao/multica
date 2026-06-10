@@ -284,6 +284,34 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	if extErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: failed to load runtime extensions: %v\n", extErr)
 	}
+
+	// MULTICA_RUNTIMES_INCLUDE lets operators inject additional runtime
+	// directories without requiring users to create files manually. For
+	// internal / company-wide deployments, ship a directory tree under a
+	// known path (e.g. /opt/lightbox/runtimes/) and set this env var at
+	// daemon startup. The daemon merges manifests from ALL paths; the
+	// default `~/.multica/runtimes/` still works so users can add their
+	// own personal runtimes alongside the company ones.
+	//
+	// Delimiter is os.PathListSeparator so ":" on Linux/macOS and ";"
+	// on Windows — same convention as PATH. Each path is scanned with
+	// LoadRuntimeManifests (same rules: a directory tree with runtime.json
+	// in subdirectories).
+	if include := os.Getenv("MULTICA_RUNTIMES_INCLUDE"); include != "" {
+		for _, dir := range strings.Split(include, string(os.PathListSeparator)) {
+			dir = strings.TrimSpace(dir)
+			if dir == "" {
+				continue
+			}
+			extra, err := LoadRuntimeManifests(dir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to load runtime extensions from %s: %v\n", dir, err)
+				continue
+			}
+			extManifests = append(extManifests, extra...)
+		}
+	}
+
 	for _, m := range extManifests {
 		if _, exists := agents[m.Provider]; exists {
 			fmt.Fprintf(os.Stderr, "warning: runtime extension %q conflicts with built-in provider %q, skipping\n", m.ID, m.Provider)
