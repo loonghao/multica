@@ -275,7 +275,6 @@ function WelcomeIllustration() {
 
 type ProviderName =
   | "claude"
-  | "codebuddy"
   | "codex"
   | "opencode"
   | "openclaw"
