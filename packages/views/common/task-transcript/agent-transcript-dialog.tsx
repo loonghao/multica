@@ -644,7 +644,6 @@ function formatProvider(provider: string): string {
   const map: Record<string, string> = {
     claude: "Claude Code",
     "claude-code": "Claude Code",
-    codebuddy: "CodeBuddy",
     codex: "Codex",
     pi: "Pi",
   };
