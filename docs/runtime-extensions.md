@@ -402,6 +402,62 @@ daemon keeps starting, so a broken manifest never bricks the host.
 
 ---
 
+## Deployment & distribution
+
+### Company-wide runtimes via `MULTICA_RUNTIMES_INCLUDE`
+
+For internal / team-wide deployments, ship a directory tree of runtime
+manifests and point the daemon at it with `MULTICA_RUNTIMES_INCLUDE`:
+
+```bash
+# Ship manifests to /opt/lightbox/runtimes/codebuddy/runtime.json
+# and /opt/lightbox/runtimes/internal-cli/runtime.json
+
+export MULTICA_RUNTIMES_INCLUDE=/opt/lightbox/runtimes
+multica daemon restart
+```
+
+Multiple paths are supported (delimiter follows `PATH` convention —
+`:` on Linux/macOS, `;` on Windows):
+
+```bash
+export MULTICA_RUNTIMES_INCLUDE="/opt/lightbox/runtimes:/shared/team-runtimes"
+```
+
+The daemon **merges** manifests from all paths. `~/.multica/runtimes/`
+still works alongside the include paths, so users can add their own
+personal runtimes without touching the company ones. When two manifests
+share the same `provider`, the first one loaded wins (the default
+`~/.multica/runtimes/` is loaded first).
+
+This makes it trivial to deploy a runtime extension fleet-wide without
+touching each user's home directory — just drop the manifests in a
+shared directory, set the env var in the daemon's systemd/launchd unit,
+and every developer picks them up on the next daemon restart.
+
+### Configuring the daemon for fleet deployment
+
+Example systemd unit snippet (`~/.config/systemd/user/multica-daemon.service`):
+
+```ini
+[Service]
+Environment="MULTICA_RUNTIMES_INCLUDE=/opt/lightbox/runtimes"
+Environment="MULTICA_LOG_LEVEL=info"
+ExecStart=/usr/local/bin/multica daemon start
+```
+
+Example launchd plist snippet (`~/Library/LaunchAgents/com.multica.daemon.plist`):
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>MULTICA_RUNTIMES_INCLUDE</key>
+    <string>/opt/lightbox/runtimes</string>
+</dict>
+```
+
+---
+
 ## FAQ
 
 ### Why is my model picker empty in the UI?
