@@ -12,19 +12,19 @@ func TestLoadRuntimeManifests(t *testing.T) {
 
 	dir := t.TempDir()
 
-	// Create a valid manifest.
-	subDir := filepath.Join(dir, "codebuddy")
+	// Create a valid manifest (external-runtime as example).
+	subDir := filepath.Join(dir, "external-runtime")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	valid := RuntimeManifest{
-		ID:        "codebuddy",
-		Name:      "CodeBuddy Code",
+		ID:        "external-runtime",
+		Name:      "External Runtime",
 		Version:   "1.0.0",
-		Provider:  "codebuddy",
+		Provider:  "external-runtime",
 		Transport: "acp-stdio",
 		Command: RuntimeManifestCommand{
-			Executable:  "codebuddy",
+			Executable:  "/usr/bin/runtime",
 			Args:        []string{"--acp"},
 			BlockedArgs: map[string]string{"--output-format": "value"},
 		},
@@ -38,15 +38,15 @@ func TestLoadRuntimeManifests(t *testing.T) {
 			Attachments:    true,
 		},
 		Models: []RuntimeManifestModel{
-			{ID: "deepseek-v4-pro-ioa", Label: "DeepSeek V4 Pro", Default: true, Thinking: []string{"none", "low", "high"}},
+			{ID: "model-a", Label: "Model A", Default: true, Thinking: []string{"none", "low", "high"}},
 		},
 		Pricing: map[string]RuntimePricing{
-			"deepseek-v4-pro-ioa": {Input: 0.5, Output: 1.5, CacheRead: 0.05},
+			"model-a": {Input: 0.5, Output: 1.5, CacheRead: 0.05},
 		},
 		Env:           map[string]string{"FOO": "bar"},
 		MinCLIVersion: "1.0.0",
 		IconURL:       "https://example.com/icon.png",
-		Description:   "CodeBuddy reference runtime",
+		Description:   "Reference external runtime",
 	}
 	data, _ := json.MarshalIndent(valid, "", "  ")
 	if err := os.WriteFile(filepath.Join(subDir, "runtime.json"), data, 0o644); err != nil {
@@ -107,28 +107,28 @@ func TestLoadRuntimeManifests(t *testing.T) {
 		t.Fatalf("LoadRuntimeManifests: %v", err)
 	}
 	if len(manifests) != 2 {
-		t.Fatalf("expected 2 manifests (codebuddy+stream), got %d", len(manifests))
+		t.Fatalf("expected 2 manifests (external-runtime+stream), got %d", len(manifests))
 	}
 
-	// Find the codebuddy manifest
+	// Find the external-runtime manifest
 	var m RuntimeManifest
 	for _, x := range manifests {
-		if x.ID == "codebuddy" {
+		if x.ID == "external-runtime" {
 			m = x
 			break
 		}
 	}
 	if m.ID == "" {
-		t.Fatalf("codebuddy manifest not loaded")
+		t.Fatalf("external-runtime manifest not loaded")
 	}
-	if m.Provider != "codebuddy" {
-		t.Errorf("provider = %q, want codebuddy", m.Provider)
+	if m.Provider != "external-runtime" {
+		t.Errorf("provider = %q, want external-runtime", m.Provider)
 	}
 	if m.Transport != "acp-stdio" {
 		t.Errorf("transport = %q, want acp-stdio", m.Transport)
 	}
-	if m.Command.Executable != "codebuddy" {
-		t.Errorf("command.executable = %q, want codebuddy", m.Command.Executable)
+	if m.Command.Executable != "/usr/bin/runtime" {
+		t.Errorf("command.executable = %q, want /usr/bin/runtime", m.Command.Executable)
 	}
 	if len(m.Command.Args) != 1 || m.Command.Args[0] != "--acp" {
 		t.Errorf("command.args = %v, want [--acp]", m.Command.Args)

@@ -217,7 +217,7 @@ func (d *Daemon) reportDiscoveredModels(ctx context.Context, rt Runtime, request
 // ── JSON parsing for CLI model discovery ───────────────────────────────
 
 // CLIModelsOutput is the expected JSON structure from a CLI model
-// discovery command (e.g. `codebuddy --list-models --format json`).
+// discovery command (e.g. `<cli> --list-models --format json`).
 type CLIModelsOutput struct {
 	Models []CLIModelEntry `json:"models"`
 }

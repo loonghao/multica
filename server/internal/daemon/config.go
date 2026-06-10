@@ -679,7 +679,7 @@ func shellArgsFromEnv(name string) ([]string, error) {
 // invocation, instead of paying the cost-per-miss.
 var defaultAgentCommandNames = []string{
 	"claude", "codex", "opencode", "openclaw", "hermes",
-	"gemini", "pi", "cursor-agent", "copilot", "kimi", "kiro-cli", "agy", "codebuddy",
+	"gemini", "pi", "cursor-agent", "copilot", "kimi", "kiro-cli", "agy",
 }
 
 var codexDesktopAppBundlePaths = func() []string {

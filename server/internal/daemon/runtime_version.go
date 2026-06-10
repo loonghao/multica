@@ -45,7 +45,7 @@ var manifestVersionRe = regexp.MustCompile(`v?(\d+)\.(\d+)\.(\d+)`)
 // extractSemverToken returns the first MAJOR.MINOR.PATCH token in s, or "" if
 // none. The leading `v` is stripped so callers can compare results against
 // bare-semver thresholds. Useful when a CLI prints something like
-// "codebuddy 1.4.2 (Tencent CodeBuddy)" — we want "1.4.2", not the rest.
+// "my-cli 1.4.2 (Company Internal)" — we want "1.4.2", not the rest.
 func extractSemverToken(s string) string {
 	m := manifestVersionRe.FindStringSubmatch(s)
 	if m == nil {

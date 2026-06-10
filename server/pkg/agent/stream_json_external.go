@@ -14,7 +14,7 @@ import (
 )
 
 // streamJSONExternalBackend implements Backend for external runtime
-// extensions that speak the Claude/CodeBuddy stream-json NDJSON protocol on
+// extensions that speak the Claude-compatible stream-json NDJSON protocol on
 // stdin/stdout, as opposed to the JSON-RPC ACP transport.
 //
 // The wire format is identical to Claude Code's `--output-format stream-json
@@ -95,7 +95,7 @@ func (b *streamJSONExternalBackend) Execute(ctx context.Context, prompt string, 
 
 	// Write the initial user prompt frame in a separate goroutine so the
 	// stdout reader can drain even if the CLI emits a startup banner before
-	// reading stdin (avoids the same deadlock the codebuddy backend hit).
+	// reading stdin (avoids the same deadlock seen in built-in stream-json backends).
 	writeDone := make(chan error, 1)
 	go func() {
 		err := writeStreamJSONUserFrame(stdin, prompt)
@@ -136,7 +136,7 @@ func (b *streamJSONExternalBackend) Execute(ctx context.Context, prompt string, 
 			if line == "" {
 				continue
 			}
-			var evt codebuddyStreamEvent
+			var evt streamJSONEvent
 			if err := json.Unmarshal([]byte(line), &evt); err != nil {
 				continue
 			}
@@ -209,7 +209,7 @@ func (b *streamJSONExternalBackend) Execute(ctx context.Context, prompt string, 
 // (typically the protocol flags `-p --output-format stream-json
 // --input-format stream-json --verbose`), then appends capability-gated
 // daemon flags, then the user-supplied extra/custom args (filtered against
-// the manifest's blocked set). Order matches the Claude/CodeBuddy
+// the manifest's blocked set). Order matches the Claude convention:
 // convention: protocol flags → daemon-managed flags → user flags.
 func buildStreamJSONExternalArgs(cfg Config, opts ExecOptions, blocked map[string]blockedArgMode) []string {
 	args := append([]string{}, cfg.ACPArgs...)
@@ -233,7 +233,7 @@ func buildStreamJSONExternalArgs(cfg Config, opts ExecOptions, blocked map[strin
 	return args
 }
 
-// writeStreamJSONUserFrame writes a single Claude/CodeBuddy-shaped user
+// writeStreamJSONUserFrame writes a single Claude-shaped user
 // message to stdin and returns. Closing stdin is the caller's job — the
 // runtime keeps stdin open so the same backend could in principle be
 // extended to multi-turn streaming later without changing the wire format.
@@ -260,10 +260,10 @@ func writeStreamJSONUserFrame(w io.Writer, prompt string) error {
 
 // handleStreamJSONAssistant fans an assistant event out into individual
 // Message values on ch and accumulates token usage into the usage map.
-// Mirrors codebuddyBackend.handleAssistant so manifest authors writing a
+// Mirrors the built-in stream-json backend assistant handler so manifest authors writing a
 // new stream-json provider get the same parsing for free.
-func handleStreamJSONAssistant(evt codebuddyStreamEvent, ch chan<- Message, output *strings.Builder, usage map[string]TokenUsage) {
-	var content codebuddyMessageContent
+func handleStreamJSONAssistant(evt streamJSONEvent, ch chan<- Message, output *strings.Builder, usage map[string]TokenUsage) {
+	var content streamJSONMessageContent
 	if err := json.Unmarshal(evt.Message, &content); err != nil {
 		return
 	}
@@ -301,8 +301,8 @@ func handleStreamJSONAssistant(evt codebuddyStreamEvent, ch chan<- Message, outp
 	}
 }
 
-func handleStreamJSONUser(evt codebuddyStreamEvent, ch chan<- Message) {
-	var content codebuddyMessageContent
+func handleStreamJSONUser(evt streamJSONEvent, ch chan<- Message) {
+	var content streamJSONMessageContent
 	if err := json.Unmarshal(evt.Message, &content); err != nil {
 		return
 	}
