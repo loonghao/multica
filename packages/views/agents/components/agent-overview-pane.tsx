@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { providerSupportsMcpConfig } from "@multica/core/agents";
+import { isTabVisibleForRuntime } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import {
@@ -147,11 +147,9 @@ export function AgentOverviewPane({
   // deployments without Lark are the common case, so flashing the tab on
   // then off would be the worse flicker.
   const visibleTabs = useMemo(() => {
-    const showMcp = runtime ? providerSupportsMcpConfig(runtime.provider) : true;
     return detailTabs.filter((tab) => {
-      if (tab.id === "mcp_config") return showMcp;
       if (tab.id === "integrations") return larkConfigured;
-      return true;
+      return isTabVisibleForRuntime(tab.id, runtime);
     });
   }, [runtime, larkConfigured]);
 
