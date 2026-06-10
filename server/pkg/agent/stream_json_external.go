@@ -151,14 +151,7 @@ func (b *streamJSONExternalBackend) Execute(ctx context.Context, prompt string, 
 				}
 				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 			case "result":
-				if evt.ResultText != "" {
-					output.Reset()
-					output.WriteString(evt.ResultText)
-				}
-				if evt.IsError {
-					finalStatus = "failed"
-					finalError = evt.ResultText
-				}
+				handleStreamJSONResult(evt, &output, &finalStatus, &finalError)
 				closeStdin()
 			}
 		}
@@ -317,6 +310,20 @@ func handleStreamJSONUser(evt streamJSONEvent, ch chan<- Message) {
 				CallID: block.ToolUseID,
 				Output: resultStr,
 			})
+		}
+	}
+}
+
+func handleStreamJSONResult(evt streamJSONEvent, output *strings.Builder, finalStatus, finalError *string) {
+	if evt.ResultText != "" {
+		output.Reset()
+		output.WriteString(evt.ResultText)
+	}
+	if evt.IsError {
+		*finalStatus = "failed"
+		*finalError = evt.ResultText
+		if *finalError == "" {
+			*finalError = evt.Subtype
 		}
 	}
 }

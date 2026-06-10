@@ -150,6 +150,30 @@ func TestBuildACPSessionParamsMcpConfigACPShape(t *testing.T) {
 	}
 }
 
+// TestBuildACPPromptParamsUsesSessionIDAndTextBlocks pins the ACP
+// session/prompt contract for external runtime extensions. The runtime
+// returns sessionId from session/new; every prompt turn must send that id
+// plus text-block prompt content rather than a bare string payload.
+func TestBuildACPPromptParamsUsesSessionIDAndTextBlocks(t *testing.T) {
+	t.Parallel()
+	params := buildACPPromptParams("ses-ext-1", "hello runtime")
+	if got := params["sessionId"]; got != "ses-ext-1" {
+		t.Fatalf("sessionId = %v, want ses-ext-1", got)
+	}
+	for _, key := range []string{"prompt", "content"} {
+		blocks, ok := params[key].([]map[string]any)
+		if !ok {
+			t.Fatalf("%s = %T, want []map[string]any", key, params[key])
+		}
+		if len(blocks) != 1 {
+			t.Fatalf("%s len = %d, want 1", key, len(blocks))
+		}
+		if blocks[0]["type"] != "text" || blocks[0]["text"] != "hello runtime" {
+			t.Fatalf("%s[0] = %v, want text block", key, blocks[0])
+		}
+	}
+}
+
 // TestManifestBlockedArgsTranslation pins the wire format ("flag" vs
 // "value") to the internal blockedArgMode constants the filter consumes.
 // A regression here would cause a manifest-declared blocked flag to
@@ -158,11 +182,11 @@ func TestBuildACPSessionParamsMcpConfigACPShape(t *testing.T) {
 func TestManifestBlockedArgsTranslation(t *testing.T) {
 	t.Parallel()
 	in := map[string]string{
-		"--output-format":  "value",
-		"--dangerous":      "flag",
-		"--legacy":         "boolean", // alias for flag
-		"--unknown":        "?",       // unknown defaults to value (safer)
-		"--mode-explicit":  "VALUE",   // case-insensitive
+		"--output-format": "value",
+		"--dangerous":     "flag",
+		"--legacy":        "boolean", // alias for flag
+		"--unknown":       "?",       // unknown defaults to value (safer)
+		"--mode-explicit": "VALUE",   // case-insensitive
 	}
 	out := manifestBlockedArgs(in)
 

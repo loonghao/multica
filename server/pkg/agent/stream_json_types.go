@@ -13,7 +13,8 @@ type streamJSONEvent struct {
 	Type       string          `json:"type"`
 	Message    json.RawMessage `json:"message,omitempty"`
 	SessionID  string          `json:"session_id,omitempty"`
-	ResultText string          `json:"subtype,omitempty"` // "result" events carry text here
+	Subtype    string          `json:"subtype,omitempty"`  // "success", "error", etc.
+	ResultText string          `json:"result,omitempty"`   // final text for "result" events
 	IsError    bool            `json:"is_error,omitempty"` // true when the CLI reports a failure
 }
 

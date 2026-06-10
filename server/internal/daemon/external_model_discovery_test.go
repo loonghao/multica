@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -115,6 +117,112 @@ func TestParseCLIModelsJSON_LabelFallsBackToID(t *testing.T) {
 	}
 	if result.Models[0].Label != "no-label" {
 		t.Errorf("label should fall back to id, got %q", result.Models[0].Label)
+	}
+}
+
+func TestParseCodeBuddyProductModelsJSON(t *testing.T) {
+	t.Parallel()
+	input := `{
+		"models": [
+			{"id": "deepseek-v4-pro-ioa", "name": "Deepseek-V4-Pro"},
+			{"id": "hidden-model", "name": "Hidden", "hidden": true},
+			{"id": "disabled-model", "name": "Disabled", "disabled": true},
+			{"id": "nameless-model"},
+			{"id": "deepseek-v4-pro-ioa", "name": "Duplicate"}
+		]
+	}`
+
+	result, err := parseCodeBuddyProductModelsJSON([]byte(input))
+	if err != nil {
+		t.Fatalf("parseCodeBuddyProductModelsJSON: %v", err)
+	}
+	if len(result.Models) != 2 {
+		t.Fatalf("expected 2 visible models, got %d", len(result.Models))
+	}
+	if result.Models[0].ID != "deepseek-v4-pro-ioa" || result.Models[0].Label != "Deepseek-V4-Pro" {
+		t.Fatalf("first model = %+v", result.Models[0])
+	}
+	if !result.Models[0].Default {
+		t.Fatal("first CodeBuddy product model should be marked as default when catalog has no explicit default")
+	}
+	if result.Models[0].Provider != "codebuddy" {
+		t.Fatalf("provider = %q", result.Models[0].Provider)
+	}
+	if result.Models[1].ID != "nameless-model" || result.Models[1].Label != "nameless-model" {
+		t.Fatalf("second model = %+v", result.Models[1])
+	}
+}
+
+func TestFindCodeBuddyPackageRootFromAdjacentNodeModules(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "node_modules", "@tencent-ai", "codebuddy-code")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"@tencent-ai/codebuddy-code"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(dir, "codebuddy")
+	if err := os.WriteFile(wrapper, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := findCodeBuddyPackageRoot(wrapper)
+	if err != nil {
+		t.Fatalf("findCodeBuddyPackageRoot: %v", err)
+	}
+	if got != root {
+		t.Fatalf("root = %q, want %q", got, root)
+	}
+}
+
+func TestResolveCodeBuddyProductPathPrefersManifestEnvPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	productPath := filepath.Join(dir, "product.ioa.json")
+	if err := os.WriteFile(productPath, []byte(`{"models":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := resolveCodeBuddyProductPath(AgentEntry{
+		Path:       "missing-codebuddy",
+		ManifestID: "codebuddy",
+		Provider:   "codebuddy",
+		Env:        map[string]string{"ACC_PRODUCT_CONFIG_PATH": productPath},
+	})
+	if err != nil {
+		t.Fatalf("resolveCodeBuddyProductPath: %v", err)
+	}
+	if got != productPath {
+		t.Fatalf("product path = %q, want %q", got, productPath)
+	}
+}
+
+func TestFindCodeBuddyProductForModel(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "product.json"), []byte(`{
+		"models": [{"id": "default-model", "name": "Default"}]
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "product.ioa.json"), []byte(`{
+		"models": [{"id": "deepseek-v4-pro-ioa", "name": "Deepseek-V4-Pro"}]
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := findCodeBuddyProductForModel(root, "deepseek-v4-pro-ioa")
+	want := filepath.Join(root, "product.ioa.json")
+	if got != want {
+		t.Fatalf("product path = %q, want %q", got, want)
+	}
+	if got := findCodeBuddyProductForModel(root, "missing"); got != "" {
+		t.Fatalf("missing model should not resolve a product file, got %q", got)
 	}
 }
 

@@ -141,6 +141,58 @@ func TestLoadRuntimeManifests(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeManifestsAcceptsJSONCComments(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	subDir := filepath.Join(dir, "codebuddy")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest := `{
+		"id": "codebuddy",
+		"name": "CodeBuddy Code",
+		"version": "1.0.0",
+		"description": "uses https://example.com/catalog.json",
+		"provider": "codebuddy",
+		"transport": "stream-json",
+		"command": {
+			"executable": "codebuddy",
+			"args": ["-p"]
+		},
+		"models_discovery": {
+			"method": "cli",
+			"cli": {
+				"args": ["--list-models", "--format", "json"]
+			}
+		},
+		// Keep sample models here while testing local catalogs.
+		"icon_url": "https://example.com/codebuddy.svg"
+	}`
+	if err := os.WriteFile(filepath.Join(subDir, "runtime.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifests, err := LoadRuntimeManifests(dir)
+	if err != nil {
+		t.Fatalf("LoadRuntimeManifests: %v", err)
+	}
+	if len(manifests) != 1 {
+		t.Fatalf("expected 1 manifest, got %d", len(manifests))
+	}
+	m := manifests[0]
+	if m.IconURL != "https://example.com/codebuddy.svg" {
+		t.Fatalf("icon_url = %q", m.IconURL)
+	}
+	if m.Description != "uses https://example.com/catalog.json" {
+		t.Fatalf("comment stripper corrupted URL string: %q", m.Description)
+	}
+	if m.ModelsDiscovery == nil || m.ModelsDiscovery.CLI == nil || len(m.ModelsDiscovery.CLI.Args) != 3 {
+		t.Fatalf("models_discovery lost: %+v", m.ModelsDiscovery)
+	}
+}
+
 // TestRuntimeManifestToAgentEntryPropagatesEverything makes sure every
 // new field added to RuntimeManifest also gets copied into AgentEntry.
 // A future addition that forgets to extend ToAgentEntry will fail this

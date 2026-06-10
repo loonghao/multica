@@ -36,8 +36,23 @@ func (d *Daemon) discoverExternalModels(ctx context.Context, rt Runtime, request
 	switch disc.Method {
 	case "cli":
 		result, err = d.discoverExternalCLIModels(ctx, entry)
+		if err != nil && isCodeBuddyEntry(entry) {
+			productResult, productErr := d.discoverCodeBuddyProductModels(entry)
+			if productErr == nil && productResult != nil && len(productResult.Models) > 0 {
+				if d.logger != nil {
+					d.logger.Info("external cli model discovery fell back to CodeBuddy product catalog",
+						"provider", entry.Provider, "method", disc.Method, "error", err)
+				}
+				result = productResult
+				err = nil
+			} else if productErr != nil {
+				err = fmt.Errorf("%w; codebuddy product catalog fallback: %v", err, productErr)
+			}
+		}
 	case "acp":
 		result, err = d.discoverExternalACPModels(ctx, entry)
+	case "codebuddy-product":
+		result, err = d.discoverCodeBuddyProductModels(entry)
 	default:
 		err = fmt.Errorf("unsupported models_discovery.method %q", disc.Method)
 	}

@@ -666,6 +666,7 @@ export interface RuntimeModelListRequest {
   runtime_id: string;
   status: RuntimeModelListStatus;
   models?: RuntimeModel[];
+  pricing?: Record<string, RuntimeModelPricing>;
   supported: boolean;
   error?: string;
   created_at: string;
@@ -678,6 +679,7 @@ export interface RuntimeModelListRequest {
 export interface RuntimeModelsResult {
   models: RuntimeModel[];
   supported: boolean;
+  pricing?: Record<string, RuntimeModelPricing>;
 }
 
 export type RuntimeLocalSkillStatus =

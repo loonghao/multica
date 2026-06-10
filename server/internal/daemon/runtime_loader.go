@@ -20,27 +20,29 @@ type RuntimeManifest struct {
 	Version         string                    `json:"version"`
 	Description     string                    `json:"description,omitempty"`
 	Provider        string                    `json:"provider"`
-	Transport       string                    `json:"transport"`     // "acp-stdio" or "stream-json"
+	Transport       string                    `json:"transport"` // "acp-stdio" or "stream-json"
 	LaunchHeader    string                    `json:"launch_header,omitempty"`
 	Command         RuntimeManifestCommand    `json:"command"`
 	Capabilities    *RuntimeManifestCaps      `json:"capabilities,omitempty"`
 	Models          []RuntimeManifestModel    `json:"models,omitempty"`
 	ModelsDiscovery *ModelsDiscoveryConfig    `json:"models_discovery,omitempty"`
-	ConfigFile      string                    `json:"config_file,omitempty"`    // "AGENTS.md", "CLAUDE.md", "" to skip
-	SkillsRoot      string                    `json:"skills_root,omitempty"`    // relative to home or absolute
-	IconURL         string                    `json:"icon_url,omitempty"`       // remote URL for the provider icon
+	ConfigFile      string                    `json:"config_file,omitempty"` // "AGENTS.md", "CLAUDE.md", "" to skip
+	SkillsRoot      string                    `json:"skills_root,omitempty"` // relative to home or absolute
+	IconURL         string                    `json:"icon_url,omitempty"`    // remote URL for the provider icon
 	Pricing         map[string]RuntimePricing `json:"pricing,omitempty"`
 	MinCLIVersion   string                    `json:"min_cli_version,omitempty"` // e.g. "0.2.0"
 	Env             map[string]string         `json:"env,omitempty"`
 }
 
 // ModelsDiscoveryConfig declares how the runtime discovers available models
-// at runtime (via CLI command or ACP session/new handshake). When present,
-// the daemon prefers dynamic discovery over the static `models` array;
-// the static list serves as a fallback if discovery fails.
+// at runtime (via CLI command, ACP session/new handshake, or a provider-local
+// product catalog). When present, the daemon prefers dynamic discovery over
+// the static `models` array; the static list serves as a fallback if discovery
+// fails.
 type ModelsDiscoveryConfig struct {
-	// Method is "cli" or "acp". When omitted, auto-inferred from the
-	// manifest transport: stream-json → "cli", acp-stdio → "acp".
+	// Method is "cli", "acp", or "codebuddy-product". When omitted,
+	// auto-inferred from the manifest transport: stream-json → "cli",
+	// acp-stdio → "acp".
 	Method string `json:"method,omitempty"`
 	// CLI is populated when method="cli" (stream-json transports).
 	CLI *CLIDiscoveryConfig `json:"cli,omitempty"`
@@ -62,10 +64,10 @@ type CLIDiscoveryConfig struct {
 
 // RuntimeManifestCommand describes how to launch the ACP-compatible CLI.
 type RuntimeManifestCommand struct {
-	Executable         string              `json:"executable"`
-	Args               []string            `json:"args,omitempty"`
-	BlockedArgs        map[string]string   `json:"blocked_args,omitempty"`         // flag → "flag" or "value"
-	ExtraArgsAllowlist []string            `json:"extra_args_allowlist,omitempty"` // daemon-level args allowed through
+	Executable         string            `json:"executable"`
+	Args               []string          `json:"args,omitempty"`
+	BlockedArgs        map[string]string `json:"blocked_args,omitempty"`         // flag → "flag" or "value"
+	ExtraArgsAllowlist []string          `json:"extra_args_allowlist,omitempty"` // daemon-level args allowed through
 }
 
 // RuntimeManifestCaps declares which optional features the runtime supports.
@@ -227,6 +229,12 @@ func LoadRuntimeManifests(rootDir string) ([]RuntimeManifest, error) {
 			continue
 		}
 
+		data, err = stripJSONComments(data)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: invalid runtime manifest %s: %v\n", manifestPath, err)
+			continue
+		}
+
 		var m RuntimeManifest
 		if err := json.Unmarshal(data, &m); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: invalid runtime manifest %s: %v\n", manifestPath, err)
@@ -275,6 +283,81 @@ func LoadRuntimeManifests(rootDir string) ([]RuntimeManifest, error) {
 	}
 
 	return manifests, nil
+}
+
+func stripJSONComments(data []byte) ([]byte, error) {
+	out := make([]byte, 0, len(data))
+	inString := false
+	escaped := false
+
+	for i := 0; i < len(data); {
+		c := data[i]
+
+		if inString {
+			out = append(out, c)
+			i++
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch c {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+
+		if c == '"' {
+			inString = true
+			out = append(out, c)
+			i++
+			continue
+		}
+
+		if c == '/' && i+1 < len(data) {
+			switch data[i+1] {
+			case '/':
+				i += 2
+				for i < len(data) && data[i] != '\n' && data[i] != '\r' {
+					i++
+				}
+				if i < len(data) && data[i] == '\r' {
+					out = append(out, data[i])
+					i++
+				}
+				if i < len(data) && data[i] == '\n' {
+					out = append(out, data[i])
+					i++
+				}
+				continue
+			case '*':
+				i += 2
+				closed := false
+				for i < len(data) {
+					if i+1 < len(data) && data[i] == '*' && data[i+1] == '/' {
+						i += 2
+						closed = true
+						break
+					}
+					if data[i] == '\r' || data[i] == '\n' {
+						out = append(out, data[i])
+					}
+					i++
+				}
+				if !closed {
+					return nil, fmt.Errorf("unterminated block comment")
+				}
+				continue
+			}
+		}
+
+		out = append(out, c)
+		i++
+	}
+
+	return out, nil
 }
 
 // DefaultRuntimesDir returns the default path for user-installed runtime

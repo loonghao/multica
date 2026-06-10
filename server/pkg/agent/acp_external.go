@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os/exec"
 	"strings"
 	"sync"
@@ -33,6 +32,8 @@ import (
 type acpExternalBackend struct {
 	cfg Config
 }
+
+const acpExternalExitGrace = 5 * time.Second
 
 func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
 	execPath := b.cfg.ExecutablePath
@@ -101,144 +102,166 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 		trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 
 		startTime := time.Now()
+		var outputMu sync.Mutex
 		var output strings.Builder
 		var sessionID string
 		finalStatus := "completed"
 		var finalError string
-		usage := make(map[string]TokenUsage)
+		var streamingCurrentTurn atomic.Bool
+		var err error
 
-		reader := bufio.NewReader(stdout)
-		decoder := json.NewDecoder(reader)
-		var reqID atomic.Int64
-
-		writeJSON := func(payload any) error {
-			data, err := json.Marshal(payload)
-			if err != nil {
-				return err
-			}
-			data = append(data, '\n')
-			_, err = stdin.Write(data)
-			return err
+		promptDone := make(chan hermesPromptResult, 1)
+		c := &hermesClient{
+			cfg:          b.cfg,
+			stdin:        stdin,
+			pending:      make(map[int]*pendingRPC),
+			pendingTools: make(map[string]*pendingToolCall),
+			acceptNotification: func(string) bool {
+				return streamingCurrentTurn.Load()
+			},
+			onMessage: func(msg Message) {
+				if !streamingCurrentTurn.Load() {
+					return
+				}
+				if msg.Type == MessageText {
+					outputMu.Lock()
+					output.WriteString(msg.Content)
+					outputMu.Unlock()
+				}
+				trySend(msgCh, msg)
+			},
+			onPromptDone: func(result hermesPromptResult) {
+				if !streamingCurrentTurn.Load() {
+					return
+				}
+				select {
+				case promptDone <- result:
+				default:
+				}
+			},
 		}
 
-		// Phase 1: ACP initialize handshake.
-		if err := writeJSON(map[string]any{
-			"jsonrpc": "2.0",
-			"id":      reqID.Add(1),
-			"method":  "initialize",
-			"params": map[string]any{
-				"protocolVersion": "1.0",
-				"clientInfo": map[string]string{
-					"name":    "multica-daemon",
-					"version": "0.1.0",
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			scanner := bufio.NewScanner(stdout)
+			scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" {
+					continue
+				}
+				c.handleLine(line)
+			}
+			c.closeAllPending(fmt.Errorf("acp external process exited"))
+		}()
+
+		{
+			// Phase 1: ACP initialize handshake.
+			initResult, err := c.request(runCtx, "initialize", map[string]any{
+				"protocolVersion": 1,
+				"clientInfo": map[string]any{
+					"name":    "multica-agent-sdk",
+					"version": "0.2.0",
 				},
-				"capabilities": map[string]any{},
-			},
-		}); err != nil {
-			finalStatus = "failed"
-			finalError = fmt.Sprintf("acp initialize write: %v", err)
+				"clientCapabilities": map[string]any{},
+			})
+			if err != nil {
+				finalStatus = "failed"
+				finalError = fmt.Sprintf("acp initialize failed: %v", err)
+				goto finish
+			}
+
+			// Phase 2: session/new — forward optional params per capability flags
+			// and read the response so session/prompt can carry the ACP session ID.
+			sessionParams := buildACPSessionParams(opts, b.cfg.Capabilities)
+			if servers, ok := sessionParams["mcpServers"].([]map[string]any); ok {
+				serversAny := make([]any, 0, len(servers))
+				for _, server := range servers {
+					serversAny = append(serversAny, server)
+				}
+				sessionParams["mcpServers"] = filterACPMcpServersByCapability(serversAny, extractACPMcpCapabilities(initResult), "acp external", b.cfg.Logger)
+			}
+			sessionResult, err := c.request(runCtx, "session/new", sessionParams)
+			if err != nil {
+				finalStatus = "failed"
+				finalError = fmt.Sprintf("acp session/new failed: %v", err)
+				goto finish
+			}
+			sessionID = extractACPSessionID(sessionResult)
+			if sessionID == "" {
+				finalStatus = "failed"
+				finalError = "acp session/new returned no session ID"
+				goto finish
+			}
+			c.sessionID = sessionID
+		}
+
+		// Phase 3: session/prompt. ACP runtimes expect the sessionId
+		// returned by session/new plus text-block prompt content. Send both
+		// `prompt` and `content` so current Kiro-style and canonical ACP
+		// shapes are accepted by generic runtime extensions.
+		streamingCurrentTurn.Store(true)
+		_, err = c.request(runCtx, "session/prompt", buildACPPromptParams(sessionID, prompt))
+		if err != nil {
+			switch {
+			case runCtx.Err() == context.DeadlineExceeded:
+				finalStatus = "timeout"
+				finalError = fmt.Sprintf("acp external timed out after %s", timeout)
+			case runCtx.Err() == context.Canceled:
+				finalStatus = "aborted"
+				finalError = "execution cancelled"
+			default:
+				finalStatus = "failed"
+				finalError = fmt.Sprintf("acp session/prompt failed: %v", err)
+			}
 			goto finish
 		}
-		{
-			// Read initialize response (skip notifications).
-			var initResp map[string]any
-			if err := b.skipToResponse(decoder, &initResp); err != nil {
-				finalStatus = "failed"
-				finalError = err.Error()
-				goto finish
+		select {
+		case pr := <-promptDone:
+			if pr.stopReason == "cancelled" {
+				finalStatus = "aborted"
+				finalError = "acp external cancelled the prompt"
 			}
-		}
-
-		// Phase 2: session/new — forward optional params per capability flags.
-		{
-			sessionParams := buildACPSessionParams(opts, b.cfg.Capabilities)
-			if err := writeJSON(map[string]any{
-				"jsonrpc": "2.0",
-				"id":      reqID.Add(1),
-				"method":  "session/new",
-				"params":  sessionParams,
-			}); err != nil {
-				finalStatus = "failed"
-				finalError = fmt.Sprintf("acp session/new write: %v", err)
-				goto finish
-			}
-		}
-
-		// Phase 3: session/prompt.
-		{
-			if err := writeJSON(map[string]any{
-				"jsonrpc": "2.0",
-				"id":      reqID.Add(1),
-				"method":  "session/prompt",
-				"params": map[string]any{
-					"prompt": prompt,
-				},
-			}); err != nil {
-				finalStatus = "failed"
-				finalError = fmt.Sprintf("acp session/prompt write: %v", err)
-				goto finish
-			}
-		}
-
-		// Phase 4: Read events from session until close.
-		for {
-			var raw json.RawMessage
-			if err := decoder.Decode(&raw); err != nil {
-				if err == io.EOF {
-					break
-				}
-				continue
-			}
-
-			var frame map[string]any
-			if err := json.Unmarshal(raw, &frame); err != nil {
-				continue
-			}
-
-			// Skip JSON-RPC responses (they have an "id").
-			if _, hasID := frame["id"]; hasID {
-				continue
-			}
-
-			method, _ := frame["method"].(string)
-			params, _ := frame["params"].(map[string]any)
-			if params == nil {
-				params = map[string]any{}
-			}
-
-			switch method {
-			case "session/update":
-				if sid, ok := params["sessionId"].(string); ok && sid != "" {
-					sessionID = sid
-				}
-				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
-			case "assistant/message":
-				b.handleAssistantMessage(params, msgCh, &output, usage)
-			case "tool/result":
-				b.handleToolResult(params, msgCh)
-			case "session/error":
-				finalStatus = "failed"
-				if msg, ok := params["message"].(string); ok {
-					finalError = msg
-				} else {
-					finalError = "session error"
-				}
-				goto finish
-			case "session/close":
-				goto finish
-			}
+			c.usageMu.Lock()
+			c.usage.InputTokens += pr.usage.InputTokens
+			c.usage.OutputTokens += pr.usage.OutputTokens
+			c.usage.CacheReadTokens += pr.usage.CacheReadTokens
+			c.usage.CacheWriteTokens += pr.usage.CacheWriteTokens
+			c.usageMu.Unlock()
+		default:
 		}
 
 	finish:
 		closeStdin()
-		waitErr := cmd.Wait()
+		ctxErr := runCtx.Err()
+		waitDone := make(chan error, 1)
+		go func() { waitDone <- cmd.Wait() }()
+
+		var waitErr error
+		select {
+		case waitErr = <-waitDone:
+		case <-runCtx.Done():
+			ctxErr = runCtx.Err()
+			cancel()
+			waitErr = <-waitDone
+		case <-time.After(acpExternalExitGrace):
+			cancel()
+			waitErr = <-waitDone
+			if finalStatus == "completed" {
+				finalStatus = "failed"
+				finalError = fmt.Sprintf("acp external did not exit within %s after prompt completion", acpExternalExitGrace)
+			}
+		}
+		<-readerDone
+		cancel()
 		duration := time.Since(startTime)
 
 		switch {
-		case runCtx.Err() == context.DeadlineExceeded:
+		case ctxErr == context.DeadlineExceeded:
 			finalStatus = "timeout"
 			finalError = fmt.Sprintf("acp external timed out after %s", timeout)
-		case runCtx.Err() == context.Canceled:
+		case ctxErr == context.Canceled:
 			finalStatus = "aborted"
 			finalError = "execution cancelled"
 		case waitErr != nil && finalStatus == "completed":
@@ -254,17 +277,43 @@ func (b *acpExternalBackend) Execute(ctx context.Context, prompt string, opts Ex
 
 		b.cfg.Logger.Info("acp external finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
+		outputMu.Lock()
+		finalOutput := output.String()
+		outputMu.Unlock()
+		c.usageMu.Lock()
+		u := c.usage
+		c.usageMu.Unlock()
+		var usageMap map[string]TokenUsage
+		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+			model := opts.Model
+			if model == "" {
+				model = "unknown"
+			}
+			usageMap = map[string]TokenUsage{model: u}
+		}
+
 		resCh <- Result{
 			Status:     finalStatus,
-			Output:     output.String(),
+			Output:     finalOutput,
 			Error:      finalError,
 			DurationMs: duration.Milliseconds(),
 			SessionID:  sessionID,
-			Usage:      usage,
+			Usage:      usageMap,
 		}
 	}()
 
 	return &Session{Messages: msgCh, Result: resCh}, nil
+}
+
+func buildACPPromptParams(sessionID, prompt string) map[string]any {
+	promptBlocks := []map[string]any{
+		{"type": "text", "text": prompt},
+	}
+	return map[string]any{
+		"sessionId": sessionID,
+		"content":   promptBlocks,
+		"prompt":    promptBlocks,
+	}
 }
 
 // buildACPSessionParams assembles the params object for the ACP `session/new`

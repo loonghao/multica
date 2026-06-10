@@ -130,6 +130,47 @@ func TestWriteStreamJSONUserFrameProducesNDJSON(t *testing.T) {
 	}
 }
 
+func TestHandleStreamJSONResultUsesResultFieldNotSubtype(t *testing.T) {
+	t.Parallel()
+	var evt streamJSONEvent
+	if err := json.Unmarshal([]byte(`{"type":"result","subtype":"success","result":"actual final answer"}`), &evt); err != nil {
+		t.Fatalf("unmarshal result event: %v", err)
+	}
+	var output strings.Builder
+	output.WriteString("partial")
+	status := "completed"
+	errText := ""
+
+	handleStreamJSONResult(evt, &output, &status, &errText)
+
+	if output.String() != "actual final answer" {
+		t.Fatalf("output = %q, want final result text", output.String())
+	}
+	if status != "completed" || errText != "" {
+		t.Fatalf("status/error = %q/%q, want completed/no error", status, errText)
+	}
+}
+
+func TestHandleStreamJSONResultErrorUsesResultMessage(t *testing.T) {
+	t.Parallel()
+	var evt streamJSONEvent
+	if err := json.Unmarshal([]byte(`{"type":"result","subtype":"error","is_error":true,"result":"real failure text"}`), &evt); err != nil {
+		t.Fatalf("unmarshal result event: %v", err)
+	}
+	var output strings.Builder
+	status := "completed"
+	errText := ""
+
+	handleStreamJSONResult(evt, &output, &status, &errText)
+
+	if status != "failed" {
+		t.Fatalf("status = %q, want failed", status)
+	}
+	if errText != "real failure text" {
+		t.Fatalf("error = %q, want real failure text", errText)
+	}
+}
+
 // TestStreamJSONExternalRouting_AgentNew sanity checks that the factory
 // hands back a streamJSONExternalBackend when transport == "stream-json".
 // This is the gate that lets an external runtime use the same parser

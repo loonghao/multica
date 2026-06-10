@@ -182,6 +182,18 @@ func InjectRuntimeConfigForEntry(workDir, configFile string, ctx TaskContextForE
 	return content, writeRuntimeConfigFile(path, content)
 }
 
+// CleanupRuntimeConfigForEntry is the cleanup counterpart for
+// InjectRuntimeConfigForEntry. External runtime extensions declare their
+// config filename in runtime.json, so cleanup must use that filename instead
+// of the built-in provider -> file mapping used by CleanupRuntimeConfig.
+func CleanupRuntimeConfigForEntry(workDir, configFile string) error {
+	path := runtimeConfigPathForEntry(workDir, configFile)
+	if path == "" {
+		return nil
+	}
+	return cleanupRuntimeConfigPath(path)
+}
+
 // runtimeConfigPath returns the absolute path to the runtime config file that
 // InjectRuntimeConfig writes for the given provider, or "" when the provider
 // has no file-based config target. Centralising the mapping keeps Inject /
@@ -340,6 +352,10 @@ func CleanupRuntimeConfig(workDir, provider string) error {
 	if path == "" {
 		return nil
 	}
+	return cleanupRuntimeConfigPath(path)
+}
+
+func cleanupRuntimeConfigPath(path string) error {
 	existing, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

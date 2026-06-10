@@ -1502,7 +1502,8 @@ func (d *Daemon) handleModelList(ctx context.Context, rt Runtime, requestID stri
 	}
 
 	// Three-way dispatch for external runtime extensions:
-	//  1. Dynamic discovery (CLI or ACP) when models_discovery is configured
+	//  1. Dynamic discovery (CLI, ACP, or provider-local catalog) when
+	//     models_discovery is configured
 	//  2. Static models array from manifest (fallback)
 	//  3. Empty list (no discovery, no static)
 	// Built-in providers always go through agent.ListModels().
@@ -3005,6 +3006,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		defer func() {
 			if cerr := execenv.CleanupRuntimeConfig(env.WorkDir, provider); cerr != nil {
 				d.logger.Warn("execenv: cleanup runtime config failed (non-fatal)", "error", cerr)
+			}
+			if entry.ConfigFile != "" {
+				if cerr := execenv.CleanupRuntimeConfigForEntry(env.WorkDir, entry.ConfigFile); cerr != nil {
+					d.logger.Warn("execenv: cleanup external runtime config failed (non-fatal)", "error", cerr)
+				}
 			}
 			// Excise the sidecar tree (.agent_context/, .multica/,
 			// provider-specific .claude/skills/ etc.) that Prepare wrote

@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import { Monitor } from "lucide-react";
 
 // Claude (Anthropic) — official mark, sourced from Bootstrap Icons (bi-claude)
@@ -212,7 +212,9 @@ export function ProviderLogo({
   iconUrl?: string;
   className?: string;
 }) {
-  if (iconUrl) {
+  const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
+
+  if (iconUrl && failedIconUrl !== iconUrl) {
     // Render the manifest-supplied icon. We don't try to gate this on
     // a provider id allowlist because external runtimes register with
     // arbitrary keys — that's the entire point of runtime extensions.
@@ -222,19 +224,7 @@ export function ProviderLogo({
         alt={provider}
         className={`${className} rounded-sm object-contain`}
         referrerPolicy="no-referrer"
-        onError={(e) => {
-          // If the URL fails (404, broken image, network block), hide
-          // the <img> so the parent wrapper's bg/border keeps the
-          // layout stable. The default Monitor icon will render in its
-          // place on the next render cycle because iconUrl is still
-          // truthy in JSX — we rely on the fact that a zero-size image
-          // collapses, so the parent flex container still has the
-          // border/background but no visible content. This is a known
-          // trade-off: the fallback SVG path isn't reachable here
-          // without a state toggle, which adds unnecessary complexity
-          // for a rare error case.
-          (e.currentTarget as HTMLImageElement).style.display = "none";
-        }}
+        onError={() => setFailedIconUrl(iconUrl)}
       />
     );
   }

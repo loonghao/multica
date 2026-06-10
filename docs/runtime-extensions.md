@@ -10,6 +10,7 @@ internal fork of Claude Code, anything — without rebuilding the daemon.
 The daemon scans `~/.multica/runtimes/<id>/runtime.json` at startup, treats
 each manifest as a discoverable provider, and routes tasks to the matching
 generic backend (`acp-stdio` or `stream-json`).
+`runtime.json` may use JSONC-style `//` or `/* ... */` comments.
 
 ## TL;DR — register an internal CLI in 2 minutes
 
@@ -115,7 +116,7 @@ model list at runtime — no manifest update needed when models change.
 ```jsonc
 {
   "models_discovery": {
-    "method": "cli",             // "cli" (stream-json) or "acp" (acp-stdio)
+    "method": "cli",             // "cli", "acp", or "codebuddy-product"
     "cli": {
       "args": ["--list-models", "--format", "json"],
       "timeout_seconds": 15      // default 15s
@@ -153,6 +154,15 @@ pricing table the daemon reports to the frontend.
 `initialize` → `session/new` handshake and reads models from the
 `result.models.availableModels` array in the session/new response.
 Per-model `pricing` is extracted the same way.
+
+**CodeBuddy product discovery** (`method: "codebuddy-product"`): the daemon
+reads the local `@tencent-ai/codebuddy-code` package's `product*.json`
+catalog and exposes visible models. This is also used automatically as a
+fallback when a CodeBuddy stream-json runtime declares CLI discovery but the
+installed CLI does not provide that list-models command. Selection order is:
+`ACC_PRODUCT_CONFIG_PATH`, `MULTICA_CODEBUDDY_PRODUCT_FILE`, the catalog that
+contains the user's current `~/.codebuddy/settings.json` model, then the
+package default `product.json`.
 
 **Fallback**: when discovery fails (timeout, parse error, CLI not
 found), the static `models` array is used instead. A warning is logged
@@ -395,7 +405,7 @@ A manifest is **rejected at startup** when:
 - The `provider` collides with a built-in (`claude`, `codex`, `copilot`,
   `opencode`, `openclaw`, `hermes`, `gemini`, `pi`, `cursor`, `kimi`,
   `kiro`, `antigravity`).
-- The JSON itself fails to parse.
+- The JSON/JSONC itself fails to parse.
 
 Rejected manifests print a warning to stderr and are simply skipped — the
 daemon keeps starting, so a broken manifest never bricks the host.
@@ -462,9 +472,9 @@ Example launchd plist snippet (`~/Library/LaunchAgents/com.multica.daemon.plist`
 
 ### Why is my model picker empty in the UI?
 
-Either `models` is missing, or the manifest doesn't declare
-`model_selection: true`. The daemon serves the static `models` array
-when both are present.
+Either `models` / `models_discovery` is missing, discovery failed without a
+static fallback, or the manifest doesn't declare `model_selection: true`.
+The daemon serves discovered models first, then the static `models` array.
 
 ### My CLI hangs forever after returning a result.
 
@@ -498,6 +508,7 @@ For contributors hacking on the runtime extension system itself:
 | `server/internal/daemon/types.go`                                   | `AgentEntry` and capability propagation.                   |
 | `server/internal/daemon/config.go`                                  | Hooks into `LoadConfig` to register external manifests.    |
 | `server/internal/daemon/daemon.go`                                  | Provider→backend wiring, model list, registration payload. |
+| `server/internal/daemon/codebuddy_product_discovery.go`              | CodeBuddy `product*.json` model discovery fallback.        |
 | `server/internal/daemon/execenv/runtime_config.go`                  | `InjectRuntimeConfigForEntry` writes the brief to the workdir. |
 | `server/pkg/agent/agent.go`                                         | `agent.New` factory; routes external entries by transport. |
 | `server/pkg/agent/acp_external.go`                                  | Generic ACP backend.                                       |

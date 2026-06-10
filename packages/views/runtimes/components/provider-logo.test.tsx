@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { ProviderLogo } from "./provider-logo";
 
 describe("ProviderLogo", () => {
@@ -33,6 +33,19 @@ describe("ProviderLogo", () => {
     // handle gracefully — render the fallback Monitor icon so the row
     // doesn't visually collapse.
     const { container } = render(<ProviderLogo provider="totally-new" />);
+    expect(container.querySelector("svg")).toBeTruthy();
+  });
+
+  it("falls back when a manifest-supplied icon fails to load", () => {
+    const { container } = render(
+      <ProviderLogo
+        provider="totally-new"
+        iconUrl="https://example.com/missing.svg"
+      />,
+    );
+    fireEvent.error(screen.getByRole("img", { name: "totally-new" }));
+
+    expect(screen.queryByRole("img", { name: "totally-new" })).toBeNull();
     expect(container.querySelector("svg")).toBeTruthy();
   });
 
