@@ -6,9 +6,14 @@
 // per-task wrapper preparer in `server/internal/daemon/execenv/` which
 // materialises `mcp.servers` into the synthesised config rather than going
 // through ExecOptions.
+//
+// NOTE: this set covers built-in providers only. External runtime
+// extensions control MCP visibility through their manifest's
+// `capabilities.mcp_config` flag — see `isTabVisibleForRuntime` in
+// tab-visibility.ts. Adding a new built-in provider here is the only
+// hard-coded path; everything else is data-driven.
 const MCP_SUPPORTED_PROVIDERS = new Set([
   "claude",
-  "codebuddy",
   "codex",
   "hermes",
   "kimi",
