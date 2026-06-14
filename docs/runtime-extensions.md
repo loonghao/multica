@@ -2,6 +2,11 @@
 
 > **Status:** schema v1 — supports both ACP (`acp-stdio`) and stream-json
 > transports as of v0.3.18+.
+>
+> Runtime extensions v1 describe **provider launch and transport** only.
+> Runtime profiles, fallback/pool policies, shared MCP/tooling, and container
+> execution policy are tracked in
+> [`runtime-extensions-architecture-rfc.md`](./runtime-extensions-architecture-rfc.md).
 
 Runtime extensions let you register **any compatible CLI** as a Multica agent
 provider — internal company tools, your own ACP/stream-json server, an
@@ -60,6 +65,7 @@ as a registered runtime in the workspace settings.
 
 | Field                  | Required | Type                  | Notes                                                                     |
 | ---------------------- | -------- | --------------------- | ------------------------------------------------------------------------- |
+| `schema_version`       | ❌        | integer               | Manifest schema version. Omitted means `1`; unsupported future versions are skipped at daemon startup. |
 | `id`                   | ✅        | string                | Unique key under `~/.multica/runtimes/`.                                  |
 | `name`                 | ✅        | string                | Display name shown in the UI.                                             |
 | `version`              | ❌        | string                | Manifest version (cosmetic).                                              |

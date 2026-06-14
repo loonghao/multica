@@ -193,6 +193,67 @@ func TestLoadRuntimeManifestsAcceptsJSONCComments(t *testing.T) {
 	}
 }
 
+func TestLoadRuntimeManifestsSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeManifest := func(name string, body string) {
+		t.Helper()
+		subDir := filepath.Join(dir, name)
+		if err := os.MkdirAll(subDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(subDir, "runtime.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeManifest("implicit-v1", `{
+		"id": "implicit-v1",
+		"name": "Implicit v1",
+		"provider": "implicit-v1",
+		"transport": "acp-stdio",
+		"command": {"executable": "/usr/bin/true"}
+	}`)
+	writeManifest("explicit-v1", `{
+		"schema_version": 1,
+		"id": "explicit-v1",
+		"name": "Explicit v1",
+		"provider": "explicit-v1",
+		"transport": "stream-json",
+		"command": {"executable": "/usr/bin/true"}
+	}`)
+	writeManifest("future-v99", `{
+		"schema_version": 99,
+		"id": "future-v99",
+		"name": "Future v99",
+		"provider": "future-v99",
+		"transport": "acp-stdio",
+		"command": {"executable": "/usr/bin/true"}
+	}`)
+
+	manifests, err := LoadRuntimeManifests(dir)
+	if err != nil {
+		t.Fatalf("LoadRuntimeManifests: %v", err)
+	}
+	if len(manifests) != 2 {
+		t.Fatalf("expected implicit+explicit v1 manifests only, got %d: %+v", len(manifests), manifests)
+	}
+	loaded := map[string]bool{}
+	for _, m := range manifests {
+		loaded[m.ID] = true
+	}
+	if !loaded["implicit-v1"] {
+		t.Errorf("implicit v1 manifest should load")
+	}
+	if !loaded["explicit-v1"] {
+		t.Errorf("explicit v1 manifest should load")
+	}
+	if loaded["future-v99"] {
+		t.Errorf("unsupported future manifest must be skipped")
+	}
+}
+
 // TestRuntimeManifestToAgentEntryPropagatesEverything makes sure every
 // new field added to RuntimeManifest also gets copied into AgentEntry.
 // A future addition that forgets to extend ToAgentEntry will fail this

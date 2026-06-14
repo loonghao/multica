@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -15,6 +16,7 @@ import (
 //
 // Schema version: v1
 type RuntimeManifest struct {
+	SchemaVersion   int                       `json:"schema_version,omitempty"`
 	ID              string                    `json:"id"`
 	Name            string                    `json:"name"`
 	Version         string                    `json:"version"`
@@ -108,12 +110,56 @@ type RuntimePricing struct {
 	CacheWrite float64 `json:"cacheWrite,omitempty"`
 }
 
+const defaultRuntimeManifestSchemaVersion = 1
+
+// SupportedRuntimeManifestSchemaVersions lists the runtime.json schemas this
+// daemon can safely execute. Missing schema_version is treated as v1 so older
+// manifests keep loading.
+var SupportedRuntimeManifestSchemaVersions = map[int]struct{}{
+	defaultRuntimeManifestSchemaVersion: {},
+}
+
 // SupportedTransports lists the transport strings the daemon understands. A
 // manifest declaring an unknown transport is rejected at load time rather
 // than at task spawn time so misconfiguration surfaces during startup.
 var SupportedTransports = map[string]struct{}{
 	"acp-stdio":   {},
 	"stream-json": {},
+}
+
+func runtimeManifestSchemaVersion(m RuntimeManifest) int {
+	if m.SchemaVersion == 0 {
+		return defaultRuntimeManifestSchemaVersion
+	}
+	return m.SchemaVersion
+}
+
+func isSupportedRuntimeManifestSchemaVersion(version int) bool {
+	_, ok := SupportedRuntimeManifestSchemaVersions[version]
+	return ok
+}
+
+func supportedRuntimeManifestSchemaVersionsLabel() string {
+	versions := make([]string, 0, len(SupportedRuntimeManifestSchemaVersions))
+	for v := range SupportedRuntimeManifestSchemaVersions {
+		versions = append(versions, fmt.Sprintf("%d", v))
+	}
+	sort.Strings(versions)
+	return strings.Join(versions, ", ")
+}
+
+func isSupportedRuntimeTransport(transport string) bool {
+	_, ok := SupportedTransports[transport]
+	return ok
+}
+
+func supportedRuntimeTransportsLabel() string {
+	supported := make([]string, 0, len(SupportedTransports))
+	for k := range SupportedTransports {
+		supported = append(supported, k)
+	}
+	sort.Strings(supported)
+	return strings.Join(supported, ", ")
 }
 
 // ToAgentEntry converts a runtime manifest into a daemon AgentEntry for
@@ -241,6 +287,13 @@ func LoadRuntimeManifests(rootDir string) ([]RuntimeManifest, error) {
 			continue
 		}
 
+		schemaVersion := runtimeManifestSchemaVersion(m)
+		if !isSupportedRuntimeManifestSchemaVersion(schemaVersion) {
+			fmt.Fprintf(os.Stderr, "warning: runtime manifest %s declares unsupported schema_version %d (supported: %s)\n",
+				manifestPath, schemaVersion, supportedRuntimeManifestSchemaVersionsLabel())
+			continue
+		}
+
 		// Validate required fields.
 		var missing []string
 		if m.ID == "" {
@@ -268,13 +321,9 @@ func LoadRuntimeManifests(rootDir string) ([]RuntimeManifest, error) {
 		// readable, but anything else must be in SupportedTransports so
 		// `agent.New()` can route to a real backend.
 		if m.Transport != "" {
-			if _, ok := SupportedTransports[m.Transport]; !ok {
-				supported := make([]string, 0, len(SupportedTransports))
-				for k := range SupportedTransports {
-					supported = append(supported, k)
-				}
+			if !isSupportedRuntimeTransport(m.Transport) {
 				fmt.Fprintf(os.Stderr, "warning: runtime manifest %s declares unsupported transport %q (supported: %s)\n",
-					manifestPath, m.Transport, strings.Join(supported, ", "))
+					manifestPath, m.Transport, supportedRuntimeTransportsLabel())
 				continue
 			}
 		}
